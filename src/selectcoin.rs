@@ -5,10 +5,6 @@ use crate::{
     },
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput},
 };
-use std::{
-    sync::{Arc, Mutex},
-    thread,
-};
 
 /// The global coin selection API that applies all algorithms and produces the result with the lowest [WasteMetric].
 ///
@@ -16,16 +12,13 @@ use std::{
 type CoinSelectionFn =
     fn(&[OutputGroup], &CoinSelectionOpt) -> Result<SelectionOutput, SelectionError>;
 
-#[derive(Debug)]
-struct SharedState {
-    result: Result<SelectionOutput, SelectionError>,
-    any_success: bool,
-}
-
 pub fn select_coin(
     inputs: &[OutputGroup],
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
+    let mut results = vec![];
+    let mut last_err = None;
+
     let algorithms: Vec<CoinSelectionFn> = vec![
         select_coin_bnb,
         select_coin_fifo,
@@ -33,43 +26,32 @@ pub fn select_coin(
         select_coin_srd,
         select_coin_knapsack, // Future algorithms can be added here
     ];
-    // Shared result for all threads
-    let best_result = Arc::new(Mutex::new(SharedState {
-        result: Err(SelectionError::NoSolutionFound),
-        any_success: false,
-    }));
-    for &algorithm in &algorithms {
-        let best_result_clone = Arc::clone(&best_result);
-        thread::scope(|s| {
-            s.spawn(|| {
-                let result = algorithm(inputs, options);
-                let mut state = best_result_clone.lock().unwrap();
-                match result {
-                    Ok(selection_output) => {
-                        if match &state.result {
-                            Ok(current_best) => selection_output.waste.0 < current_best.waste.0,
-                            Err(_) => true,
-                        } {
-                            state.result = Ok(selection_output);
-                            state.any_success = true;
-                        }
-                    }
-                    Err(e) => {
-                        if e == SelectionError::InsufficientFunds && !state.any_success {
-                            // Only set to InsufficientFunds if no algorithm succeeded
-                            state.result = Err(SelectionError::InsufficientFunds);
-                        }
-                    }
-                }
-            });
-        });
+
+    for algo in algorithms {
+        match algo(inputs, options) {
+            Ok(result) => {
+                let input_amount = result
+                    .selected_inputs
+                    .iter()
+                    .map(|&idx| inputs[idx].value)
+                    .sum::<u64>();
+                let change = input_amount.saturating_sub(options.target_value);
+                results.push((result, change));
+            }
+            Err(e) => last_err = Some(e),
+        }
     }
-    // Extract the result from the shared state
-    Arc::try_unwrap(best_result)
-        .expect("Arc unwrap failed")
-        .into_inner()
-        .expect("Mutex lock failed")
-        .result
+
+    println!("Results: {:?}", results);
+
+    let best_result = results
+        .into_iter()
+        .min_by(|a, b| a.0.waste.0.cmp(&b.0.waste.0).then_with(|| a.1.cmp(&b.1)))
+        .map(|(result, _)| result);
+
+    println!("Best Result: {:?}", best_result);
+
+    best_result.ok_or(last_err.unwrap_or(SelectionError::NoSolutionFound))
 }
 
 #[cfg(test)]
