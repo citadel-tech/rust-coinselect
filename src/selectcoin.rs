@@ -39,11 +39,13 @@ pub fn select_coin(
                     .map(|&idx| inputs[idx].value)
                     .sum::<u64>();
                 let change = input_amount.saturating_sub(options.target_value);
-                results.push((result, change));
+                results.push((result, change, algo));
             }
             Err(e) => last_err = Some(e),
         }
     }
+
+    println!("Result : {:?}", results);
 
     // debug
     for all_selection in results.iter() {
@@ -53,14 +55,14 @@ pub fn select_coin(
             .iter()
             .map(|&idx| sorted_inputs[idx].value)
             .collect::<Vec<_>>();
-        println!("Result : {:?}", all_selected_values);
+        println!("Value Result : {:?}", all_selected_values);
     }
     // debug
 
     let best_result = results
         .into_iter()
         .min_by(|a, b| a.0.waste.0.cmp(&b.0.waste.0).then_with(|| a.1.cmp(&b.1)))
-        .map(|(result, _)| result);
+        .map(|(result, _, _)| result);
 
     // debug
     if let Some(ref best_selection) = best_result {
