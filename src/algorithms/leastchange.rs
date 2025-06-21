@@ -1,3 +1,5 @@
+use std::vec;
+
 use crate::{
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric},
     utils::{calculate_fee, calculate_waste, effective_value},
@@ -20,7 +22,7 @@ pub fn select_coin_bnb_leastchange(
     let mut best: Option<(Vec<usize>, u64, usize)> = None; // (selection, change, count)
 
     // Precompute net values and filter beneficial inputs
-    let mut filtered: Vec<(usize, u64)> = inputs
+    let mut filtered = inputs
         .iter()
         .enumerate()
         .filter_map(
@@ -29,7 +31,7 @@ pub fn select_coin_bnb_leastchange(
                 _ => None,
             },
         )
-        .collect();
+        .collect::<Vec<_>>();
 
     // Sort by net value descending
     filtered.sort_by(|(_, a), (_, b)| b.cmp(a));
