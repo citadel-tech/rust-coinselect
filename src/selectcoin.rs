@@ -39,7 +39,14 @@ pub fn select_coin(
                     .map(|&idx| inputs[idx].value)
                     .sum::<u64>();
                 let change = input_amount.saturating_sub(options.target_value);
-                results.push((result, change, algo));
+                results.push((
+                    result,
+                    change,
+                    std::any::type_name::<CoinSelectionFn>()
+                        .split("::")
+                        .last()
+                        .unwrap_or("Unknown"),
+                ));
             }
             Err(e) => last_err = Some(e),
         }
