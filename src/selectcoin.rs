@@ -1,7 +1,8 @@
 use crate::{
     algorithms::{
         bnb::select_coin_bnb, fifo::select_coin_fifo, knapsack::select_coin_knapsack,
-        lowestlarger::select_coin_lowestlarger, srd::select_coin_srd,
+        leastchange::select_coin_bnb_leastchange, lowestlarger::select_coin_lowestlarger,
+        srd::select_coin_srd,
     },
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput},
 };
@@ -28,6 +29,7 @@ pub fn select_coin(
         ("lowestlarger", select_coin_lowestlarger),
         ("srd", select_coin_srd),
         ("knapsack", select_coin_knapsack), // Future algorithms can be added here
+        ("leastchange", select_coin_bnb_leastchange),
     ];
 
     for (algo_name, algo) in algorithms {
@@ -63,7 +65,11 @@ pub fn select_coin(
 
     let best_result = results
         .into_iter()
-        .min_by(|a, b| a.0.waste.0.cmp(&b.0.waste.0).then_with(|| a.1.cmp(&b.1)))
+        .min_by(|a, b| {
+            a.1.cmp(&b.1)
+                .then_with(|| a.0.waste.0.cmp(&b.0.waste.0))
+                .then_with(|| a.0.selected_inputs.len().cmp(&b.0.selected_inputs.len()))
+        })
         .map(|(result, _, _)| result)
         .expect("No selection results found");
 
@@ -90,7 +96,7 @@ mod test {
         vec![
             OutputGroup {
                 value: 1_500_000,
-                weight: 500,
+                weight: 50,
                 input_count: 1,
                 creation_sequence: None,
             },
