@@ -19,6 +19,9 @@ pub fn select_coin(
     let mut results = vec![];
     let mut last_err = None;
 
+    let mut sorted_inputs = inputs.to_vec();
+    sorted_inputs.sort_by(|a, b| a.value.cmp(&b.value));
+
     let algorithms: Vec<CoinSelectionFn> = vec![
         select_coin_bnb,
         select_coin_fifo,
@@ -42,14 +45,33 @@ pub fn select_coin(
         }
     }
 
-    println!("Results: {:?}", results);
+    // debug
+    for all_selection in results.iter() {
+        let all_selected_values = all_selection
+            .0
+            .selected_inputs
+            .iter()
+            .map(|&idx| sorted_inputs[idx].value)
+            .collect::<Vec<_>>();
+        println!("Result : {:?}", all_selected_values);
+    }
+    // debug
 
     let best_result = results
         .into_iter()
         .min_by(|a, b| a.0.waste.0.cmp(&b.0.waste.0).then_with(|| a.1.cmp(&b.1)))
         .map(|(result, _)| result);
 
-    println!("Best Result: {:?}", best_result);
+    // debug
+    if let Some(ref best_selection) = best_result {
+        let selected_values = best_selection
+            .selected_inputs
+            .iter()
+            .map(|&idx| sorted_inputs[idx].value)
+            .collect::<Vec<_>>();
+        println!("Best Result : {:?}", selected_values);
+    }
+    // debug
 
     best_result.ok_or(last_err.unwrap_or(SelectionError::NoSolutionFound))
 }

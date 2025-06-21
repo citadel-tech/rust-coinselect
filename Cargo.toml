@@ -7,7 +7,7 @@ readme = "README.md"
 documentation = "https://docs.rs/rust-coinselect"
 keywords = ["UTXO", "coinselection", "subsetsum", "bitcoin", "blockchain"]
 license = "MIT"
-repository = "https://github.com/Bitshala-Incubator/rust-coinselect"
+repository = "https://github.com/Citadel-tech/rust-coinselect"
 
 exclude = [".github"]
 
