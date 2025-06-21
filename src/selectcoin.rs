@@ -17,7 +17,7 @@ pub fn select_coin(
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
     let mut results = vec![];
-    let mut last_err = None;
+    //let mut last_err = None;
 
     let mut sorted_inputs = inputs.to_vec();
     sorted_inputs.sort_by(|a, b| a.value.cmp(&b.value));
@@ -41,7 +41,9 @@ pub fn select_coin(
                 let change = input_amount.saturating_sub(options.target_value);
                 results.push((result, change, algo_name));
             }
-            Err(e) => last_err = Some(e),
+            Err(e) => {
+                println!("Algorithm {} failed: {:?}", algo_name, e);
+            }
         }
     }
 
@@ -55,27 +57,25 @@ pub fn select_coin(
             .iter()
             .map(|&idx| inputs[idx].value)
             .collect::<Vec<_>>();
-        println!("Value Result : {:?}", all_selected_values);
+        println!("Input values : {:?}", all_selected_values);
     }
     // debug
 
     let best_result = results
         .into_iter()
         .min_by(|a, b| a.0.waste.0.cmp(&b.0.waste.0).then_with(|| a.1.cmp(&b.1)))
-        .map(|(result, _, _)| result);
+        .map(|(result, _, _)| result)
+        .expect("No selection results found");
 
     // debug
-    if let Some(ref best_selection) = best_result {
-        let selected_values = best_selection
-            .selected_inputs
-            .iter()
-            .map(|&idx| inputs[idx].value)
-            .collect::<Vec<_>>();
-        println!("Best Result : {:?}", selected_values);
-    }
-    // debug
+    let selected_values = best_result
+        .selected_inputs
+        .iter()
+        .map(|&idx| inputs[idx].value)
+        .collect::<Vec<_>>();
+    println!("Best Result : {:?}", selected_values);
 
-    best_result.ok_or(last_err.unwrap_or(SelectionError::NoSolutionFound))
+    Ok(best_result)
 }
 
 #[cfg(test)]
@@ -89,20 +89,74 @@ mod test {
     fn setup_basic_output_groups() -> Vec<OutputGroup> {
         vec![
             OutputGroup {
-                value: 1000,
-                weight: 100,
+                value: 1_500_000,
+                weight: 500,
                 input_count: 1,
                 creation_sequence: None,
             },
             OutputGroup {
-                value: 2000,
+                value: 2_000_000,
                 weight: 200,
                 input_count: 1,
                 creation_sequence: None,
             },
             OutputGroup {
-                value: 3000,
+                value: 3_000_000,
                 weight: 300,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 2_500_000,
+                weight: 100,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 4_000_000,
+                weight: 150,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 500_000,
+                weight: 250,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 6_000_000,
+                weight: 120,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 70_000,
+                weight: 50,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 800_000,
+                weight: 60,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 900_000,
+                weight: 70,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 100_000,
+                weight: 80,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 1_000_000,
+                weight: 90,
                 input_count: 1,
                 creation_sequence: None,
             },
@@ -112,7 +166,7 @@ mod test {
     fn setup_options(target_value: u64) -> CoinSelectionOpt {
         CoinSelectionOpt {
             target_value,
-            target_feerate: 0.4, // Simplified feerate
+            target_feerate: 2.0, // Simplified feerate
             long_term_feerate: Some(0.4),
             min_absolute_fee: 0,
             base_weight: 10,
@@ -128,7 +182,7 @@ mod test {
     #[test]
     fn test_select_coin_successful() {
         let inputs = setup_basic_output_groups();
-        let options = setup_options(1500);
+        let options = setup_options(654321);
         let result = select_coin(&inputs, &options);
         assert!(result.is_ok());
         let selection_output = result.unwrap();
