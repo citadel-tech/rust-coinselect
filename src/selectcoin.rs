@@ -53,7 +53,7 @@ pub fn select_coin(
             .0
             .selected_inputs
             .iter()
-            .map(|&idx| sorted_inputs[idx].value)
+            .map(|&idx| inputs[idx].value)
             .collect::<Vec<_>>();
         println!("Value Result : {:?}", all_selected_values);
     }
@@ -69,7 +69,7 @@ pub fn select_coin(
         let selected_values = best_selection
             .selected_inputs
             .iter()
-            .map(|&idx| sorted_inputs[idx].value)
+            .map(|&idx| inputs[idx].value)
             .collect::<Vec<_>>();
         println!("Best Result : {:?}", selected_values);
     }
