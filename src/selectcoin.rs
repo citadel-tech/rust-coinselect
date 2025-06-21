@@ -1,6 +1,7 @@
 use crate::{
     algorithms::{
-        bnb::select_coin_bnb, fifo::select_coin_fifo, knapsack::select_coin_knapsack,
+        // bnb::select_coin_bnb, 
+        fifo::select_coin_fifo, knapsack::select_coin_knapsack,
         leastchange::select_coin_bnb_leastchange, lowestlarger::select_coin_lowestlarger,
         srd::select_coin_srd,
     },
@@ -18,13 +19,12 @@ pub fn select_coin(
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
     let mut results = vec![];
-    //let mut last_err = None;
 
     let mut sorted_inputs = inputs.to_vec();
     sorted_inputs.sort_by(|a, b| a.value.cmp(&b.value));
 
     let algorithms: Vec<(&str, CoinSelectionFn)> = vec![
-        ("bnb", select_coin_bnb),
+        // ("bnb", select_coin_bnb),
         ("fifo", select_coin_fifo),
         ("lowestlarger", select_coin_lowestlarger),
         ("srd", select_coin_srd),
@@ -49,7 +49,11 @@ pub fn select_coin(
         }
     }
 
-    println!("Result : {:?}", results);
+    if results.is_empty() {
+        return Err(SelectionError::InsufficientFunds);
+    }
+
+    println!("\nResult : {:?}\n", results);
 
     // debug
     for all_selection in results.iter() {
@@ -59,7 +63,7 @@ pub fn select_coin(
             .iter()
             .map(|&idx| inputs[idx].value)
             .collect::<Vec<_>>();
-        println!("Input values : {:?}", all_selected_values);
+        println!("\nInput values : {:?}", all_selected_values);
     }
     // debug
 
