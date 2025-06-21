@@ -22,15 +22,15 @@ pub fn select_coin(
     let mut sorted_inputs = inputs.to_vec();
     sorted_inputs.sort_by(|a, b| a.value.cmp(&b.value));
 
-    let algorithms: Vec<CoinSelectionFn> = vec![
-        select_coin_bnb,
-        select_coin_fifo,
-        select_coin_lowestlarger,
-        select_coin_srd,
-        select_coin_knapsack, // Future algorithms can be added here
+    let algorithms: Vec<(&str, CoinSelectionFn)> = vec![
+        ("bnb", select_coin_bnb),
+        ("fifo", select_coin_fifo),
+        ("lowestlarger", select_coin_lowestlarger),
+        ("srd", select_coin_srd),
+        ("knapsack", select_coin_knapsack), // Future algorithms can be added here
     ];
 
-    for algo in algorithms {
+    for (algo_name, algo) in algorithms {
         match algo(inputs, options) {
             Ok(result) => {
                 let input_amount = result
@@ -39,14 +39,7 @@ pub fn select_coin(
                     .map(|&idx| inputs[idx].value)
                     .sum::<u64>();
                 let change = input_amount.saturating_sub(options.target_value);
-                results.push((
-                    result,
-                    change,
-                    std::any::type_name::<CoinSelectionFn>()
-                        .split("::")
-                        .last()
-                        .unwrap_or("Unknown"),
-                ));
+                results.push((result, change, algo_name));
             }
             Err(e) => last_err = Some(e),
         }
