@@ -67,8 +67,8 @@ pub fn select_coin(
     let best_result = results
         .into_iter()
         .min_by(|a, b| {
-            a.1.cmp(&b.1)
-                .then_with(|| a.0.waste.0.cmp(&b.0.waste.0))
+            a.0.waste.0.cmp(&b.0.waste.0)
+                .then_with(|| a.1.cmp(&b.1))
                 .then_with(|| a.0.selected_inputs.len().cmp(&b.0.selected_inputs.len()))
         })
         .map(|(result, _, _)| result)
