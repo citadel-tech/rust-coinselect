@@ -1,8 +1,10 @@
 use crate::{
     algorithms::{
-        // bnb::select_coin_bnb, 
-        fifo::select_coin_fifo, knapsack::select_coin_knapsack,
-        leastchange::select_coin_bnb_leastchange, lowestlarger::select_coin_lowestlarger,
+        // bnb::select_coin_bnb,
+        fifo::select_coin_fifo,
+        knapsack::select_coin_knapsack,
+        leastchange::select_coin_bnb_leastchange,
+        lowestlarger::select_coin_lowestlarger,
         srd::select_coin_srd,
     },
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput},
@@ -33,19 +35,14 @@ pub fn select_coin(
     ];
 
     for (algo_name, algo) in algorithms {
-        match algo(inputs, options) {
-            Ok(result) => {
-                let input_amount = result
-                    .selected_inputs
-                    .iter()
-                    .map(|&idx| inputs[idx].value)
-                    .sum::<u64>();
-                let change = input_amount.saturating_sub(options.target_value);
-                results.push((result, change, algo_name));
-            }
-            Err(e) => {
-                println!("Algorithm {} failed: {:?}", algo_name, e);
-            }
+        if let Ok(result) = algo(inputs, options) {
+            let input_amount = result
+                .selected_inputs
+                .iter()
+                .map(|&idx| inputs[idx].value)
+                .sum::<u64>();
+            let change = input_amount.saturating_sub(options.target_value);
+            results.push((result, change, algo_name));
         }
     }
 
