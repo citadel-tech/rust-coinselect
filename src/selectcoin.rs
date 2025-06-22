@@ -50,7 +50,7 @@ pub fn select_coin(
         return Err(SelectionError::InsufficientFunds);
     }
 
-    println!("\nResult : {:?}\n", results);
+    println!("Result : {:?} \n", results);
 
     // debug
     for all_selection in results.iter() {
@@ -60,7 +60,7 @@ pub fn select_coin(
             .iter()
             .map(|&idx| inputs[idx].value)
             .collect::<Vec<_>>();
-        println!("\nInput values : {:?}", all_selected_values);
+        println!("Input values : {:?} \n", all_selected_values);
     }
     // debug
 
@@ -199,7 +199,7 @@ mod test {
     #[test]
     fn test_select_coin_insufficient_funds() {
         let inputs = setup_basic_output_groups();
-        let options = setup_options(7000); // Set a target value higher than the sum of all inputs
+        let options = setup_options(999_999_999); // Set a target value higher than the sum of all inputs
         let result = select_coin(&inputs, &options);
         assert!(matches!(result, Err(SelectionError::InsufficientFunds)));
     }
