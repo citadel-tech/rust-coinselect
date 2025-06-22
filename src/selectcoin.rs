@@ -5,7 +5,7 @@ use crate::{
         knapsack::select_coin_knapsack,
         leastchange::select_coin_bnb_leastchange,
         lowestlarger::select_coin_lowestlarger,
-        srd::select_coin_srd,
+        // srd::select_coin_srd,
     },
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput},
 };
@@ -27,9 +27,9 @@ pub fn select_coin(
 
     let algorithms: Vec<(&str, CoinSelectionFn)> = vec![
         // ("bnb", select_coin_bnb), // ALgorithmic issue, however bnb leastchange is a better alternative
+        // ("srd", select_coin_srd),
         ("fifo", select_coin_fifo),
         ("lowestlarger", select_coin_lowestlarger),
-        ("srd", select_coin_srd),
         ("knapsack", select_coin_knapsack), // Future algorithms can be added here
         ("leastchange", select_coin_bnb_leastchange),
     ];
@@ -67,7 +67,9 @@ pub fn select_coin(
     let best_result = results
         .into_iter()
         .min_by(|a, b| {
-            a.0.waste.0.cmp(&b.0.waste.0)
+            a.0.waste
+                .0
+                .cmp(&b.0.waste.0)
                 .then_with(|| a.1.cmp(&b.1))
                 .then_with(|| a.0.selected_inputs.len().cmp(&b.0.selected_inputs.len()))
         })
