@@ -26,7 +26,7 @@ pub fn select_coin(
     sorted_inputs.sort_by(|a, b| a.value.cmp(&b.value));
 
     let algorithms: Vec<(&str, CoinSelectionFn)> = vec![
-        ("bnb", select_coin_bnb), // Algorithmic issue, however bnb leastchange is a better alternative
+        ("bnb", select_coin_bnb),
         // ("srd", select_coin_srd),
         ("fifo", select_coin_fifo),
         ("lowestlarger", select_coin_lowestlarger),
@@ -175,7 +175,6 @@ mod test {
         let selection_output = result.unwrap();
         assert!(!selection_output.selected_inputs.is_empty());
 
-        #[cfg(debug_assertions)]
         let selected_values = selection_output
             .selected_inputs
             .iter()
