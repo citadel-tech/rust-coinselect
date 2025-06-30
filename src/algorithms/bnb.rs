@@ -1,176 +1,96 @@
-use rand::{rngs::ThreadRng, thread_rng, Rng};
-
 use crate::{
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric},
     utils::{calculate_fee, calculate_waste, effective_value},
 };
 
-/// Struct MatchParameters encapsulates target_for_match, match_range, and target_feerate.
+/// Struct MatchParameters encapsulates target_for_match, match_range, and target_feerate, options, tries, best solution.
 #[derive(Debug)]
-struct MatchParameters {
+struct BnbContext {
     target_for_match: u64,
     match_range: u64,
     target_feerate: f32,
+    options: CoinSelectionOpt,
+    tries: u32,
+    best_solution: Option<(Vec<usize>, u64)>,
+    // Used as a solution to Clippy's `Too Many Arguments` Warn.
+    // https://rust-lang.github.io/rust-clippy/master/#too_many_arguments
 }
 
-/// Perform Coinselection via Branch And Bound algorithm.
+/// Perform Coinselection via Branch And Bound algorithm, only returns a solution if least waste within target's `match_range` is found.
 pub fn select_coin_bnb(
     inputs: &[OutputGroup],
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
-    let mut selected_inputs: Vec<usize> = vec![];
-
-    // Variable is mutable for decrement of bnb_tries for every iteration of fn bnb
-    let mut bnb_tries: u32 = 1_000_000;
-
-    let rng = &mut thread_rng();
-
     let cost_per_input = calculate_fee(options.avg_input_weight, options.target_feerate)?;
     let cost_per_output = calculate_fee(options.avg_output_weight, options.target_feerate)?;
-
-    let match_parameters = MatchParameters {
-        target_for_match: options.target_value
-            + calculate_fee(options.base_weight, options.target_feerate)?,
-        match_range: cost_per_input + cost_per_output,
-        target_feerate: options.target_feerate,
-    };
+    let base_fee = calculate_fee(options.base_weight, options.target_feerate)?;
 
     let mut sorted_inputs: Vec<(usize, &OutputGroup)> = inputs.iter().enumerate().collect();
-    sorted_inputs.sort_by_key(|(_, input)| std::cmp::Reverse(input.value));
+    sorted_inputs.sort_by_key(|(_, input)| input.value);
 
-    let bnb_selected_coin = bnb(
-        &sorted_inputs,
-        &mut selected_inputs,
-        0,
-        0,
-        &mut bnb_tries,
-        rng,
-        &match_parameters,
-    );
-    match bnb_selected_coin {
-        Some(selected_coin) => {
-            let accumulated_value: u64 = selected_coin
-                .iter()
-                .fold(0, |acc, &i| acc + inputs[i].value);
-            let accumulated_weight: u64 = selected_coin
-                .iter()
-                .fold(0, |acc, &i| acc + inputs[i].weight);
-            let estimated_fee = 0;
-            let waste = calculate_waste(
-                options,
-                accumulated_value,
-                accumulated_weight,
-                estimated_fee,
-            );
-            let selection_output = SelectionOutput {
-                selected_inputs: selected_coin,
-                waste: WasteMetric(waste),
-            };
-            Ok(selection_output)
-        }
+    let mut ctx = BnbContext {
+        target_for_match: options.target_value + base_fee,
+        match_range: cost_per_input + cost_per_output,
+        target_feerate: options.target_feerate,
+        options: options.clone(),
+        tries: 1_000_000,
+        best_solution: None,
+    };
+
+    let mut selected_inputs = vec![];
+
+    bnb(&sorted_inputs, &mut selected_inputs, 0, 0, 0, &mut ctx);
+
+    match ctx.best_solution {
+        Some((selected, waste)) => Ok(SelectionOutput {
+            selected_inputs: selected,
+            waste: WasteMetric(waste),
+        }),
         None => Err(SelectionError::NoSolutionFound),
     }
 }
 
-/// Return empty vec if no solutions are found
-///
-/// changing the selected_inputs : &[usize] -> &mut Vec<usize>
 fn bnb(
-    inputs_in_desc_value: &[(usize, &OutputGroup)],
-    selected_inputs: &mut Vec<usize>,
-    acc_eff_value: u64,
+    sorted: &[(usize, &OutputGroup)],
+    selected: &mut Vec<usize>,
+    acc_value: u64,
+    acc_weight: u64,
     depth: usize,
-    bnb_tries: &mut u32,
-    rng: &mut ThreadRng,
-    match_parameters: &MatchParameters,
-) -> Option<Vec<usize>> {
-    if acc_eff_value > match_parameters.target_for_match + match_parameters.match_range {
-        return None;
+    ctx: &mut BnbContext,
+) {
+    if ctx.tries == 0 || depth >= sorted.len() {
+        return;
     }
-    if acc_eff_value >= match_parameters.target_for_match {
-        return Some(selected_inputs.to_vec());
-    }
+    ctx.tries -= 1;
 
-    // Capping the number of iterations on the computation
-    if *bnb_tries == 0 || depth >= inputs_in_desc_value.len() {
-        return None;
+    if acc_value > ctx.target_for_match + ctx.match_range {
+        return;
     }
 
-    // Decrement of bnb_tries for every iteration
-    *bnb_tries -= 1;
-
-    if rng.gen_bool(0.5) {
-        // exploring the inclusion branch
-        // first include then omit
-        let new_effective_value = acc_eff_value
-            + effective_value(
-                inputs_in_desc_value[depth].1,
-                match_parameters.target_feerate,
-            )
-            .unwrap_or_default();
-        selected_inputs.push(inputs_in_desc_value[depth].0);
-        let with_this = bnb(
-            inputs_in_desc_value,
-            selected_inputs,
-            new_effective_value,
-            depth + 1,
-            bnb_tries,
-            rng,
-            match_parameters,
-        );
-        match with_this {
-            Some(_) => with_this,
-            None => {
-                selected_inputs.pop(); // popping out the selected utxo if it does not fit
-                bnb(
-                    inputs_in_desc_value,
-                    selected_inputs,
-                    acc_eff_value,
-                    depth + 1,
-                    bnb_tries,
-                    rng,
-                    match_parameters,
-                )
-            }
+    if acc_value >= ctx.target_for_match {
+        let fee = 0;
+        let waste = calculate_waste(&ctx.options, acc_value, acc_weight, fee);
+        if ctx.best_solution.is_none() || waste < ctx.best_solution.as_ref().unwrap().1 {
+            ctx.best_solution = Some((selected.clone(), waste));
         }
-    } else {
-        match bnb(
-            inputs_in_desc_value,
-            selected_inputs,
-            acc_eff_value,
-            depth + 1,
-            bnb_tries,
-            rng,
-            match_parameters,
-        ) {
-            Some(without_this) => Some(without_this),
-            None => {
-                let new_effective_value = acc_eff_value
-                    + effective_value(
-                        inputs_in_desc_value[depth].1,
-                        match_parameters.target_feerate,
-                    )
-                    .unwrap_or_default();
-                selected_inputs.push(inputs_in_desc_value[depth].0);
-                let with_this = bnb(
-                    inputs_in_desc_value,
-                    selected_inputs,
-                    new_effective_value,
-                    depth + 1,
-                    bnb_tries,
-                    rng,
-                    match_parameters,
-                );
-                match with_this {
-                    Some(_) => with_this,
-                    None => {
-                        selected_inputs.pop(); // poping out the selected utxo if it does not fit
-                        None
-                    }
-                }
-            }
-        }
+        return;
     }
+
+    let (index, input) = sorted[depth];
+    let effective_val = effective_value(input, ctx.target_feerate).unwrap_or_default();
+
+    selected.push(index);
+    bnb(
+        sorted,
+        selected,
+        acc_value + effective_val,
+        acc_weight + input.weight,
+        depth + 1,
+        ctx,
+    );
+    selected.pop();
+
+    bnb(sorted, selected, acc_value, acc_weight, depth + 1, ctx);
 }
 
 #[cfg(test)]
@@ -276,7 +196,7 @@ mod test {
         let opt = bnb_setup_options(5730);
         let ans = select_coin_bnb(&values, &opt);
         if let Ok(selection_output) = ans {
-            let expected_solution = vec![7, 5, 1];
+            let expected_solution = vec![1, 5, 7];
             assert_eq!(
                 selection_output.selected_inputs, expected_solution,
                 "Expected solution {:?}, but got {:?}",
