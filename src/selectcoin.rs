@@ -30,8 +30,8 @@ pub fn select_coin(
         // ("srd", select_coin_srd),
         ("fifo", select_coin_fifo),
         ("lowestlarger", select_coin_lowestlarger),
-        ("knapsack", select_coin_knapsack), // Future algorithms can be added here
-        ("leastchange", select_coin_bnb_leastchange),
+        ("knapsack", select_coin_knapsack),
+        ("leastchange", select_coin_bnb_leastchange), // Future algorithms can be added here
     ];
 
     for (algo_name, algo) in algorithms {
