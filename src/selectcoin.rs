@@ -9,22 +9,12 @@ use crate::{
     },
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput},
 };
-use std::{
-    sync::{Arc, Mutex},
-    thread,
-};
 
 /// The global coin selection API that applies all algorithms and produces the result with the lowest [WasteMetric].
 ///
 /// At least one selection solution should be found.
 type CoinSelectionFn =
     fn(&[OutputGroup], &CoinSelectionOpt) -> Result<SelectionOutput, SelectionError>;
-
-#[derive(Debug)]
-struct SharedState {
-    result: Result<SelectionOutput, SelectionError>,
-    any_success: bool,
-}
 
 pub fn select_coin(
     inputs: &[OutputGroup],
