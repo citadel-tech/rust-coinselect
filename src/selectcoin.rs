@@ -1,6 +1,6 @@
 use crate::{
     algorithms::{
-        // bnb::select_coin_bnb,
+        bnb::select_coin_bnb,
         fifo::select_coin_fifo,
         knapsack::select_coin_knapsack,
         leastchange::select_coin_bnb_leastchange,
@@ -26,7 +26,7 @@ pub fn select_coin(
     sorted_inputs.sort_by(|a, b| a.value.cmp(&b.value));
 
     let algorithms: Vec<(&str, CoinSelectionFn)> = vec![
-        // ("bnb", select_coin_bnb), // ALgorithmic issue, however bnb leastchange is a better alternative
+        ("bnb", select_coin_bnb), // Algorithmic issue, however bnb leastchange is a better alternative
         // ("srd", select_coin_srd),
         ("fifo", select_coin_fifo),
         ("lowestlarger", select_coin_lowestlarger),
@@ -50,20 +50,6 @@ pub fn select_coin(
         return Err(SelectionError::InsufficientFunds);
     }
 
-    println!("Result : {:?} \n", results);
-
-    // debug
-    for all_selection in results.iter() {
-        let all_selected_values = all_selection
-            .0
-            .selected_inputs
-            .iter()
-            .map(|&idx| inputs[idx].value)
-            .collect::<Vec<_>>();
-        println!("Input values : {:?} \n", all_selected_values);
-    }
-    // debug
-
     let best_result = results
         .into_iter()
         .min_by(|a, b| {
@@ -75,14 +61,6 @@ pub fn select_coin(
         })
         .map(|(result, _, _)| result)
         .expect("No selection results found");
-
-    // debug
-    let selected_values = best_result
-        .selected_inputs
-        .iter()
-        .map(|&idx| inputs[idx].value)
-        .collect::<Vec<_>>();
-    println!("Best Result : {:?}", selected_values);
 
     Ok(best_result)
 }
@@ -196,6 +174,14 @@ mod test {
         assert!(result.is_ok());
         let selection_output = result.unwrap();
         assert!(!selection_output.selected_inputs.is_empty());
+
+        #[cfg(debug_assertions)]
+        let selected_values = selection_output
+            .selected_inputs
+            .iter()
+            .map(|&idx| inputs[idx].value)
+            .collect::<Vec<_>>();
+        eprintln!("Best Result : {:?}", selected_values);
     }
 
     #[test]
@@ -417,8 +403,6 @@ mod test {
         };
         let ans = select_coin(&inputs, &opt);
 
-        dbg!(&ans);
-
         if let Ok(selection_output) = ans {
             let mut selected_inputs = selection_output.selected_inputs.clone();
             selected_inputs.sort();
@@ -430,13 +414,72 @@ mod test {
             // Branch and Bound also gives a better time complexity, referenced from Mark Erhardt's Master Thesis.
 
             let expected_solution = vec![1, 2];
-            dbg!(&selected_inputs);
-            dbg!(&expected_solution);
             assert_eq!(
                 selected_inputs, expected_solution,
                 "Expected solution {:?}, but got {:?}",
                 expected_solution, selected_inputs
             );
         }
+    }
+
+    #[test]
+    fn test_select_coin_leastchange_change() {
+        // Inputs designed so that only one combination gives minimal change
+        let inputs = vec![
+            OutputGroup {
+                value: 1000,
+                weight: 10,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 2000,
+                weight: 10,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 3000,
+                weight: 10,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 4000,
+                weight: 10,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 5500,
+                weight: 10,
+                input_count: 1,
+                creation_sequence: None,
+            },
+        ];
+
+        let options = CoinSelectionOpt {
+            target_value: 4500,
+            target_feerate: 1.0,
+            min_absolute_fee: 0,
+            base_weight: 100,
+            change_weight: 10,
+            change_cost: 20,
+            avg_input_weight: 10,
+            avg_output_weight: 10,
+            min_change_value: 400,
+            long_term_feerate: Some(0.5),
+            excess_strategy: ExcessStrategy::ToChange,
+        };
+
+        let result = select_coin(&inputs, &options);
+        assert!(result.is_ok());
+        let selection_output = result.unwrap();
+        assert!(!selection_output.selected_inputs.is_empty());
+
+        let mut selected = selection_output.selected_inputs.clone();
+        selected.sort();
+        // Initially chooses Input indexed 3 from the input list due to starting in descending order, then DFS stack order.
+        assert_eq!(selected, vec![0, 3]);
     }
 }

@@ -5,7 +5,7 @@ use crate::{
     utils::{calculate_fee, calculate_waste, effective_value},
 };
 
-/// Implemented a Branch and Bound state for Least Change selection which stores the state while traversing the tree.
+/// A Branch and Bound state for Least Change selection which stores the state while traversing the tree.
 struct BnBState {
     index: usize,
     current_eff_value: u64,
@@ -13,7 +13,7 @@ struct BnBState {
     current_count: usize,
 }
 
-/// Selects inputs using BnB to minimize change and input count
+/// Selects inputs using BnB to first minimize change and then the input count.
 pub fn select_coin_bnb_leastchange(
     inputs: &[OutputGroup],
     options: &CoinSelectionOpt,
@@ -118,7 +118,7 @@ mod test {
         types::{CoinSelectionOpt, ExcessStrategy, OutputGroup, SelectionError},
     };
 
-    fn setup_lowestlarger_output_groups() -> Vec<OutputGroup> {
+    fn setup_leastchange_output_groups() -> Vec<OutputGroup> {
         vec![
             OutputGroup {
                 value: 100,
@@ -146,6 +146,12 @@ mod test {
             },
             OutputGroup {
                 value: 1190,
+                weight: 200,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 1200,
                 weight: 200,
                 input_count: 1,
                 creation_sequence: None,
@@ -206,29 +212,27 @@ mod test {
             change_cost: 10,
             avg_input_weight: 20,
             avg_output_weight: 10,
-            min_change_value: 500,
-            excess_strategy: ExcessStrategy::ToChange,
+            min_change_value: 0,
+            excess_strategy: ExcessStrategy::ToRecipient,
         }
     }
 
     #[test]
-    fn test_lowestlarger_successful() {
-        let inputs = setup_lowestlarger_output_groups();
-        let options = setup_options(20000);
+    fn test_leastchange_successful() {
+        let inputs = setup_leastchange_output_groups();
+        let options = setup_options(6600);
         let result = select_coin_bnb_leastchange(&inputs, &options);
         assert!(result.is_ok());
         let selection_output = result.unwrap();
         assert!(!selection_output.selected_inputs.is_empty());
-
-        // Check that the selected inputs are exactly [4, 5] (order doesn't matter)
         let mut selected = selection_output.selected_inputs.clone();
         selected.sort();
-        assert_eq!(selected, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 11]);
+        assert_eq!(selected, vec![0, 2, 6]);
     }
 
     #[test]
-    fn test_lowestlarger_insufficient() {
-        let inputs = setup_lowestlarger_output_groups();
+    fn test_leastchange_insufficient() {
+        let inputs = setup_leastchange_output_groups();
         let options = setup_options(40000);
         let result = select_coin_bnb_leastchange(&inputs, &options);
         assert!(matches!(result, Err(SelectionError::InsufficientFunds)));
