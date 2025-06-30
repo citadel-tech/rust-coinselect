@@ -21,12 +21,12 @@ pub fn calculate_waste(
             as u64;
     }
     if options.excess_strategy != ExcessStrategy::ToChange {
-        // Change is not created if excess strategy is ToFee or ToRecipient. Hence cost of change is added
+        // Change is created if excess strategy is set to ToChange. Hence 'excess' should be set to 0
         waste += accumulated_value
             .saturating_sub(options.target_value)
             .saturating_sub(estimated_fee);
     } else {
-        // Change is created if excess strategy is set to ToChange. Hence 'excess' should be set to 0
+        // Change is not created if excess strategy is ToFee or ToRecipient. Hence cost of change is added
         waste += options.change_cost;
     }
     waste

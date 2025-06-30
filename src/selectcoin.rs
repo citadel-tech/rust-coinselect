@@ -1,7 +1,11 @@
 use crate::{
     algorithms::{
-        bnb::select_coin_bnb, fifo::select_coin_fifo, knapsack::select_coin_knapsack,
-        lowestlarger::select_coin_lowestlarger, srd::select_coin_srd,
+        bnb::select_coin_bnb,
+        fifo::select_coin_fifo,
+        knapsack::select_coin_knapsack,
+        leastchange::select_coin_bnb_leastchange,
+        lowestlarger::select_coin_lowestlarger,
+        // srd::select_coin_srd,
     },
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput},
 };
@@ -26,50 +30,49 @@ pub fn select_coin(
     inputs: &[OutputGroup],
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
-    let algorithms: Vec<CoinSelectionFn> = vec![
-        select_coin_bnb,
-        select_coin_fifo,
-        select_coin_lowestlarger,
-        select_coin_srd,
-        select_coin_knapsack, // Future algorithms can be added here
+    let mut results = vec![];
+
+    let mut sorted_inputs = inputs.to_vec();
+    sorted_inputs.sort_by(|a, b| a.value.cmp(&b.value));
+
+    let algorithms: Vec<(&str, CoinSelectionFn)> = vec![
+        ("bnb", select_coin_bnb), // Algorithmic issue, however bnb leastchange is a better alternative
+        // ("srd", select_coin_srd),
+        ("fifo", select_coin_fifo),
+        ("lowestlarger", select_coin_lowestlarger),
+        ("knapsack", select_coin_knapsack), // Future algorithms can be added here
+        ("leastchange", select_coin_bnb_leastchange),
     ];
-    // Shared result for all threads
-    let best_result = Arc::new(Mutex::new(SharedState {
-        result: Err(SelectionError::NoSolutionFound),
-        any_success: false,
-    }));
-    for &algorithm in &algorithms {
-        let best_result_clone = Arc::clone(&best_result);
-        thread::scope(|s| {
-            s.spawn(|| {
-                let result = algorithm(inputs, options);
-                let mut state = best_result_clone.lock().unwrap();
-                match result {
-                    Ok(selection_output) => {
-                        if match &state.result {
-                            Ok(current_best) => selection_output.waste.0 < current_best.waste.0,
-                            Err(_) => true,
-                        } {
-                            state.result = Ok(selection_output);
-                            state.any_success = true;
-                        }
-                    }
-                    Err(e) => {
-                        if e == SelectionError::InsufficientFunds && !state.any_success {
-                            // Only set to InsufficientFunds if no algorithm succeeded
-                            state.result = Err(SelectionError::InsufficientFunds);
-                        }
-                    }
-                }
-            });
-        });
+
+    for (algo_name, algo) in algorithms {
+        if let Ok(result) = algo(inputs, options) {
+            let input_amount = result
+                .selected_inputs
+                .iter()
+                .map(|&idx| inputs[idx].value)
+                .sum::<u64>();
+            let change = input_amount.saturating_sub(options.target_value);
+            results.push((result, change, algo_name));
+        }
     }
-    // Extract the result from the shared state
-    Arc::try_unwrap(best_result)
-        .expect("Arc unwrap failed")
-        .into_inner()
-        .expect("Mutex lock failed")
-        .result
+
+    if results.is_empty() {
+        return Err(SelectionError::InsufficientFunds);
+    }
+
+    let best_result = results
+        .into_iter()
+        .min_by(|a, b| {
+            a.0.waste
+                .0
+                .cmp(&b.0.waste.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.0.selected_inputs.len().cmp(&b.0.selected_inputs.len()))
+        })
+        .map(|(result, _, _)| result)
+        .expect("No selection results found");
+
+    Ok(best_result)
 }
 
 #[cfg(test)]
@@ -83,20 +86,74 @@ mod test {
     fn setup_basic_output_groups() -> Vec<OutputGroup> {
         vec![
             OutputGroup {
-                value: 1000,
-                weight: 100,
+                value: 1_500_000,
+                weight: 50,
                 input_count: 1,
                 creation_sequence: None,
             },
             OutputGroup {
-                value: 2000,
+                value: 2_000_000,
                 weight: 200,
                 input_count: 1,
                 creation_sequence: None,
             },
             OutputGroup {
-                value: 3000,
+                value: 3_000_000,
                 weight: 300,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 2_500_000,
+                weight: 100,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 4_000_000,
+                weight: 150,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 500_000,
+                weight: 250,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 6_000_000,
+                weight: 120,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 70_000,
+                weight: 50,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 800_000,
+                weight: 60,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 900_000,
+                weight: 70,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 100_000,
+                weight: 80,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 1_000_000,
+                weight: 90,
                 input_count: 1,
                 creation_sequence: None,
             },
@@ -106,7 +163,7 @@ mod test {
     fn setup_options(target_value: u64) -> CoinSelectionOpt {
         CoinSelectionOpt {
             target_value,
-            target_feerate: 0.4, // Simplified feerate
+            target_feerate: 2.0, // Simplified feerate
             long_term_feerate: Some(0.4),
             min_absolute_fee: 0,
             base_weight: 10,
@@ -122,17 +179,25 @@ mod test {
     #[test]
     fn test_select_coin_successful() {
         let inputs = setup_basic_output_groups();
-        let options = setup_options(1500);
+        let options = setup_options(654321);
         let result = select_coin(&inputs, &options);
         assert!(result.is_ok());
         let selection_output = result.unwrap();
         assert!(!selection_output.selected_inputs.is_empty());
+
+        #[cfg(debug_assertions)]
+        let selected_values = selection_output
+            .selected_inputs
+            .iter()
+            .map(|&idx| inputs[idx].value)
+            .collect::<Vec<_>>();
+        eprintln!("Best Result : {:?}", selected_values);
     }
 
     #[test]
     fn test_select_coin_insufficient_funds() {
         let inputs = setup_basic_output_groups();
-        let options = setup_options(7000); // Set a target value higher than the sum of all inputs
+        let options = setup_options(999_999_999); // Set a target value higher than the sum of all inputs
         let result = select_coin(&inputs, &options);
         assert!(matches!(result, Err(SelectionError::InsufficientFunds)));
     }
@@ -348,8 +413,6 @@ mod test {
         };
         let ans = select_coin(&inputs, &opt);
 
-        dbg!(&ans);
-
         if let Ok(selection_output) = ans {
             let mut selected_inputs = selection_output.selected_inputs.clone();
             selected_inputs.sort();
@@ -361,13 +424,72 @@ mod test {
             // Branch and Bound also gives a better time complexity, referenced from Mark Erhardt's Master Thesis.
 
             let expected_solution = vec![1, 2];
-            dbg!(&selected_inputs);
-            dbg!(&expected_solution);
             assert_eq!(
                 selected_inputs, expected_solution,
                 "Expected solution {:?}, but got {:?}",
                 expected_solution, selected_inputs
             );
         }
+    }
+
+    #[test]
+    fn test_select_coin_leastchange_change() {
+        // Inputs designed so that only one combination gives minimal change
+        let inputs = vec![
+            OutputGroup {
+                value: 1000,
+                weight: 10,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 2000,
+                weight: 10,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 3000,
+                weight: 10,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 4000,
+                weight: 10,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 5500,
+                weight: 10,
+                input_count: 1,
+                creation_sequence: None,
+            },
+        ];
+
+        let options = CoinSelectionOpt {
+            target_value: 4500,
+            target_feerate: 1.0,
+            min_absolute_fee: 0,
+            base_weight: 100,
+            change_weight: 10,
+            change_cost: 20,
+            avg_input_weight: 10,
+            avg_output_weight: 10,
+            min_change_value: 400,
+            long_term_feerate: Some(0.5),
+            excess_strategy: ExcessStrategy::ToChange,
+        };
+
+        let result = select_coin(&inputs, &options);
+        assert!(result.is_ok());
+        let selection_output = result.unwrap();
+        assert!(!selection_output.selected_inputs.is_empty());
+
+        let mut selected = selection_output.selected_inputs.clone();
+        selected.sort();
+        // Initially chooses Input indexed 3 from the input list due to starting in descending order, then DFS stack order.
+        assert_eq!(selected, vec![0, 3]);
     }
 }

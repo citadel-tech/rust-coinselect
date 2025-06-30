@@ -44,3 +44,7 @@ harness = false
 [[bench]]
 name = "benches_fifo"
 harness = false
+
+[[bench]]
+name = "benches_leastchange"
+harness = false
