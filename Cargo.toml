@@ -1,13 +1,13 @@
 [package]
 name = "rust-coinselect"
-version = "0.1.1"
+version = "0.1.4"
 edition = "2021"
 description = "A blockchain-agnostic coin selection library built in Rust."
 readme = "README.md"
 documentation = "https://docs.rs/rust-coinselect"
 keywords = ["UTXO", "coinselection", "subsetsum", "bitcoin", "blockchain"]
 license = "MIT"
-repository = "https://github.com/Citadel-tech/rust-coinselect"
+repository = "https://github.com/citadel-tech/rust-coinselect"
 
 exclude = [".github"]
 
