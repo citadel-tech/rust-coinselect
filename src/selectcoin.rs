@@ -50,6 +50,8 @@ pub fn select_coin(
         return Err(SelectionError::InsufficientFunds);
     }
 
+    println!("Coin selection results: {:?}", results);
+
     let best_result = results
         .into_iter()
         .min_by(|a, b| {

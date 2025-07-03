@@ -18,7 +18,10 @@ pub fn select_coin_bnb_leastchange(
     inputs: &[OutputGroup],
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
-    let target = options.target_value + options.min_change_value;
+    let estimated_fees = 0;
+    let target = options.target_value
+        + options.min_change_value
+        + estimated_fees.max(options.min_absolute_fee);
     let mut best: Option<(Vec<usize>, u64, usize)> = None; // (selection, change, count)
 
     // Precompute net values and filter beneficial inputs
