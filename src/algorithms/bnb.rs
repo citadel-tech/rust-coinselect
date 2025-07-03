@@ -68,7 +68,8 @@ fn bnb(
     }
 
     if acc_value >= ctx.target_for_match {
-        let fee = 0;
+        let fee =
+            calculate_fee(acc_weight, ctx.target_feerate).unwrap_or(ctx.options.min_absolute_fee);
         let waste = calculate_waste(&ctx.options, acc_value, acc_weight, fee);
         if ctx.best_solution.is_none() || waste < ctx.best_solution.as_ref().unwrap().1 {
             ctx.best_solution = Some((selected.clone(), waste));
@@ -126,7 +127,7 @@ mod test {
     fn bnb_setup_options(target_value: u64) -> CoinSelectionOpt {
         CoinSelectionOpt {
             target_value,
-            target_feerate: 0.5, // Simplified feerate
+            target_feerate: 50.0, // Simplified feerate
             long_term_feerate: None,
             min_absolute_fee: 0,
             base_weight: 10,
@@ -141,7 +142,7 @@ mod test {
 
     fn test_bnb_solution() {
         // Define the test values
-        let values = [
+        let mut values = [
             OutputGroup {
                 value: 55000,
                 weight: 500,
@@ -185,18 +186,66 @@ mod test {
                 creation_sequence: None,
             },
             OutputGroup {
-                value: 5000,
+                value: 94730,
                 weight: 50,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 29810,
+                weight: 500,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 78376,
+                weight: 200,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 17218,
+                weight: 300,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 13728,
+                weight: 100,
                 input_count: 1,
                 creation_sequence: None,
             },
         ];
 
         // Adjust the target value to ensure it tests for multiple valid solutions
-        let opt = bnb_setup_options(5730);
+        let opt = bnb_setup_options(195782);
         let ans = select_coin_bnb(&values, &opt);
+        values.sort_by_key(|v| v.value);
         if let Ok(selection_output) = ans {
-            let expected_solution = vec![1, 5, 7];
+            println!(
+                "Total value minus Target : {} - {} = {}",
+                selection_output
+                    .selected_inputs
+                    .iter()
+                    .map(|&i| values[i].value)
+                    .sum::<u64>(),
+                opt.target_value,
+                selection_output
+                    .selected_inputs
+                    .iter()
+                    .map(|&i| values[i].value)
+                    .sum::<u64>()
+                    - opt.target_value
+            );
+            println!(
+                "Selected inputs: {:?}",
+                selection_output
+                    .selected_inputs
+                    .iter()
+                    .map(|&i| (i, values[i].value))
+                    .collect::<Vec<_>>()
+            );
+            let expected_solution = vec![11, 8, 4, 2, 9];
             assert_eq!(
                 selection_output.selected_inputs, expected_solution,
                 "Expected solution {:?}, but got {:?}",
