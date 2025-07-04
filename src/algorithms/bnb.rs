@@ -1,6 +1,6 @@
 use crate::{
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric},
-    utils::{calculate_fee, calculate_waste, effective_value},
+    utils::{calculate_fee, calculate_waste},
 };
 
 /// Struct MatchParameters encapsulates target_for_match, match_range, and target_feerate, options, tries, best solution.
@@ -8,7 +8,6 @@ use crate::{
 struct BnbContext {
     target_for_match: u64,
     match_range: u64,
-    target_feerate: f32,
     options: CoinSelectionOpt,
     tries: u32,
     best_solution: Option<(Vec<usize>, u64)>,
@@ -23,15 +22,14 @@ pub fn select_coin_bnb(
 ) -> Result<SelectionOutput, SelectionError> {
     let cost_per_input = calculate_fee(options.avg_input_weight, options.target_feerate)?;
     let cost_per_output = calculate_fee(options.avg_output_weight, options.target_feerate)?;
-    let base_fee = calculate_fee(options.base_weight, options.target_feerate)?;
+    // let base_fee = calculate_fee(options.base_weight, options.target_feerate)?;
 
     let mut sorted_inputs: Vec<(usize, &OutputGroup)> = inputs.iter().enumerate().collect();
     sorted_inputs.sort_by_key(|(_, input)| input.value);
 
     let mut ctx = BnbContext {
-        target_for_match: options.target_value + base_fee,
+        target_for_match: options.target_value + options.min_change_value,
         match_range: cost_per_input + cost_per_output,
-        target_feerate: options.target_feerate,
         options: options.clone(),
         tries: 1_000_000,
         best_solution: None,
@@ -63,13 +61,21 @@ fn bnb(
     }
     ctx.tries -= 1;
 
-    if acc_value > ctx.target_for_match + ctx.match_range {
+    // Calculate current fee based on accumulated weight
+    let fee = calculate_fee(acc_weight, ctx.options.target_feerate)
+        .unwrap_or(ctx.options.min_absolute_fee);
+    // .max(ctx.options.min_absolute_fee);
+
+    // Calculate effective value after fees
+    let effective_value = acc_value.saturating_sub(fee);
+
+    // Prune if we're way over target (including change consideration)
+    if effective_value > ctx.target_for_match + ctx.match_range {
         return;
     }
 
-    if acc_value >= ctx.target_for_match {
-        let fee =
-            calculate_fee(acc_weight, ctx.target_feerate).unwrap_or(ctx.options.min_absolute_fee);
+    // Check for valid solution (must cover target + min change)
+    if effective_value >= ctx.target_for_match {
         let waste = calculate_waste(&ctx.options, acc_value, acc_weight, fee);
         if ctx.best_solution.is_none() || waste < ctx.best_solution.as_ref().unwrap().1 {
             ctx.best_solution = Some((selected.clone(), waste));
@@ -78,19 +84,24 @@ fn bnb(
     }
 
     let (index, input) = sorted[depth];
-    let effective_val = effective_value(input, ctx.target_feerate).unwrap_or_default();
+    let input_effective_value = input.value.saturating_sub(
+        calculate_fee(input.weight, ctx.options.target_feerate)
+            .unwrap_or(ctx.options.min_absolute_fee),
+    );
 
+    // Branch 1: Include current input
     selected.push(index);
     bnb(
         sorted,
         selected,
-        acc_value + effective_val,
+        acc_value + input_effective_value,
         acc_weight + input.weight,
         depth + 1,
         ctx,
     );
     selected.pop();
 
+    // Branch 2: Exclude current input
     bnb(sorted, selected, acc_value, acc_weight, depth + 1, ctx);
 }
 
@@ -127,9 +138,9 @@ mod test {
     fn bnb_setup_options(target_value: u64) -> CoinSelectionOpt {
         CoinSelectionOpt {
             target_value,
-            target_feerate: 50.0, // Simplified feerate
+            target_feerate: 0.5, // Simplified feerate
             long_term_feerate: None,
-            min_absolute_fee: 0,
+            min_absolute_fee: 500,
             base_weight: 10,
             change_weight: 50,
             change_cost: 10,
