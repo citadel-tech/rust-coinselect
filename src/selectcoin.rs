@@ -2,9 +2,9 @@ use crate::{
     algorithms::{
         // bnb::select_coin_bnb,
         // fifo::select_coin_fifo,
-        knapsack::select_coin_knapsack,
+        // knapsack::select_coin_knapsack,
         // leastchange::select_coin_bnb_leastchange,
-        // lowestlarger::select_coin_lowestlarger,
+        lowestlarger::select_coin_lowestlarger,
         // srd::select_coin_srd,
     },
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput},
@@ -29,8 +29,8 @@ pub fn select_coin(
         // ("bnb", select_coin_bnb),
         // ("srd", select_coin_srd),
         // ("fifo", select_coin_fifo),
-        // ("lowestlarger", select_coin_lowestlarger),
-        ("knapsack", select_coin_knapsack),
+        ("lowestlarger", select_coin_lowestlarger),
+        // ("knapsack", select_coin_knapsack),
         // ("leastchange", select_coin_bnb_leastchange), // Future algorithms can be added here
     ];
 
