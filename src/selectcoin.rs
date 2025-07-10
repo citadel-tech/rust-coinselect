@@ -1,9 +1,9 @@
 use crate::{
     algorithms::{
-        // bnb::select_coin_bnb,
-        // fifo::select_coin_fifo,
-        // knapsack::select_coin_knapsack,
-        // leastchange::select_coin_bnb_leastchange,
+        bnb::select_coin_bnb,
+        fifo::select_coin_fifo,
+        knapsack::select_coin_knapsack,
+        leastchange::select_coin_bnb_leastchange,
         lowestlarger::select_coin_lowestlarger,
         // srd::select_coin_srd,
     },
@@ -26,12 +26,12 @@ pub fn select_coin(
     sorted_inputs.sort_by(|a, b| a.value.cmp(&b.value));
 
     let algorithms: Vec<(&str, CoinSelectionFn)> = vec![
-        // ("bnb", select_coin_bnb),
+        ("bnb", select_coin_bnb),
         // ("srd", select_coin_srd),
-        // ("fifo", select_coin_fifo),
+        ("fifo", select_coin_fifo),
         ("lowestlarger", select_coin_lowestlarger),
-        // ("knapsack", select_coin_knapsack),
-        // ("leastchange", select_coin_bnb_leastchange), // Future algorithms can be added here
+        ("knapsack", select_coin_knapsack),
+        ("leastchange", select_coin_bnb_leastchange), // Future algorithms can be added here
     ];
 
     for (algo_name, algo) in algorithms {
