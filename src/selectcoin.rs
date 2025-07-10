@@ -50,8 +50,7 @@ pub fn select_coin(
         return Err(SelectionError::InsufficientFunds);
     }
 
-    println!("Coin selection results: {:?}", results);
-    println!();
+    // println!("Coin selection results: {:?}", results);
 
     let best_result = results
         .into_iter()
