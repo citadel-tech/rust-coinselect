@@ -11,6 +11,7 @@ struct BnBState {
     current_eff_value: u64,
     current_selection: Vec<usize>,
     current_count: usize,
+    current_weight: u64,
 }
 
 /// Selects inputs using BnB to first minimize change and then the input count.
@@ -27,14 +28,14 @@ pub fn select_coin_bnb_leastchange(
         .enumerate()
         .filter_map(
             |(i, inp)| match effective_value(inp, options.target_feerate) {
-                Ok(net_value) if net_value > 0 => Some((i, net_value)),
+                Ok(net_value) if net_value > 0 => Some((i, net_value, inp.weight)),
                 _ => None,
             },
         )
         .collect::<Vec<_>>();
 
     // Sort by net value descending
-    filtered.sort_by(|(_, a), (_, b)| b.cmp(a));
+    filtered.sort_by(|(_, a, _), (_, b, _)| b.cmp(a));
 
     // Precompute remaining net values for pruning
     let n = filtered.len();
@@ -49,6 +50,7 @@ pub fn select_coin_bnb_leastchange(
         current_eff_value: 0,
         current_selection: Vec::new(),
         current_count: 0,
+        current_weight: 0,
     }];
 
     while let Some(state) = stack.pop() {
@@ -66,16 +68,24 @@ pub fn select_coin_bnb_leastchange(
             current_eff_value: state.current_eff_value,
             current_selection: state.current_selection.clone(),
             current_count: state.current_count,
+            current_weight: state.current_weight,
         });
 
-        let (orig_idx, net_value) = filtered[state.index];
+        let (orig_idx, net_value, weight) = filtered[state.index];
         let new_eff_value = state.current_eff_value + net_value;
         let mut new_selection = state.current_selection.clone();
         new_selection.push(orig_idx);
         let new_count = state.current_count + 1;
+        let new_weight = state.current_weight + weight;
 
-        if new_eff_value >= target {
-            let change = new_eff_value - target;
+        // Calculate fees based on current selection
+        let estimated_fees = calculate_fee(new_weight, options.target_feerate).unwrap_or(0);
+        let required_value = options.target_value
+            + estimated_fees.max(options.min_absolute_fee)
+            + options.min_change_value;
+
+        if new_eff_value >= required_value {
+            let change = new_eff_value - required_value;
             let update = match best {
                 None => true,
                 Some((_, best_change, best_count)) => {
@@ -91,6 +101,7 @@ pub fn select_coin_bnb_leastchange(
                 current_eff_value: new_eff_value,
                 current_selection: new_selection,
                 current_count: new_count,
+                current_weight: new_weight,
             });
         }
     }
@@ -212,7 +223,7 @@ mod test {
             change_cost: 10,
             avg_input_weight: 20,
             avg_output_weight: 10,
-            min_change_value: 500,
+            min_change_value: 294 * 5,
             excess_strategy: ExcessStrategy::ToRecipient,
         }
     }
@@ -367,7 +378,7 @@ mod test {
                     .map(|&i| (i, values[i].value))
                     .collect::<Vec<_>>()
             );
-            let expected_solution = vec![0, 2, 6, 8, 3, 10, 5];
+            let expected_solution = vec![7, 9, 0, 4, 2, 3];
             assert_eq!(
                 selection_output.selected_inputs, expected_solution,
                 "Expected solution {:?}, but got {:?}",
