@@ -28,7 +28,7 @@ pub fn select_coin_bnb_leastchange(
         .enumerate()
         .filter_map(
             |(i, inp)| match effective_value(inp, options.target_feerate) {
-                Ok(net_value) if net_value > 0 => Some((i, net_value, inp.weight)),
+                Ok(net_value) if net_value > 0 => Some((i, inp.value, inp.weight)),
                 _ => None,
             },
         )
@@ -80,10 +80,7 @@ pub fn select_coin_bnb_leastchange(
 
         // Calculate fees based on current selection
         let estimated_fees = calculate_fee(new_weight, options.target_feerate).unwrap_or(0);
-        let required_value = options.target_value
-            + estimated_fees.max(options.min_absolute_fee)
-            + options.min_change_value;
-
+        let required_value = target + estimated_fees.max(options.min_absolute_fee);
         if new_eff_value >= required_value {
             let change = new_eff_value - required_value;
             let update = match best {
