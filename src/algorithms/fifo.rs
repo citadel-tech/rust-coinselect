@@ -14,6 +14,9 @@ pub fn select_coin_fifo(
     let mut accumulated_weight: u64 = 0;
     let mut selected_inputs: Vec<usize> = Vec::new();
     let mut estimated_fees: u64 = 0;
+    let base_fees = calculate_fee(options.base_weight, options.target_feerate).unwrap_or_default();
+    let target =
+        options.target_value + options.min_change_value + base_fees.max(options.min_absolute_fee);
 
     // Sorting the inputs vector based on creation_sequence
     let mut sorted_inputs: Vec<_> = inputs
@@ -35,22 +38,14 @@ pub fn select_coin_fifo(
     for (index, inputs) in sorted_inputs {
         estimated_fees =
             calculate_fee(accumulated_weight, options.target_feerate).unwrap_or_default();
-        if accumulated_value
-            >= (options.target_value
-                + estimated_fees.max(options.min_absolute_fee)
-                + options.min_change_value)
-        {
+        if accumulated_value >= target + estimated_fees {
             break;
         }
         accumulated_value += inputs.value;
         accumulated_weight += inputs.weight;
         selected_inputs.push(index);
     }
-    if accumulated_value
-        < (options.target_value
-            + estimated_fees.max(options.min_absolute_fee)
-            + options.min_change_value)
-    {
+    if accumulated_value < target + estimated_fees {
         Err(SelectionError::InsufficientFunds)
     } else {
         let waste: u64 = calculate_waste(

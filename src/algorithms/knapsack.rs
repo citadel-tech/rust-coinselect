@@ -39,11 +39,12 @@ pub fn select_coin_knapsack(
         })
         .collect();
 
-    knap_sack(&smaller_coins, options)
+    knap_sack(&smaller_coins, adjusted_target, options)
 }
 
 fn knap_sack(
     smaller_coins: &[(usize, u64, u64, EffectiveValue)],
+    adjusted_target: u64,
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
     let mut selected_inputs: HashSet<usize> = HashSet::new();
@@ -65,9 +66,7 @@ fn knap_sack(
 
                     // Calculate current fees and required value
                     let estimated_fees = calculate_fee(accumulated_weight, options.target_feerate)?;
-                    let required_value = options.target_value
-                        + estimated_fees.max(options.min_absolute_fee)
-                        + options.min_change_value;
+                    let required_value = adjusted_target + estimated_fees;
 
                     if accumulated_value == required_value {
                         let waste = calculate_waste(

@@ -22,13 +22,15 @@ pub fn select_coin_bnb(
 ) -> Result<SelectionOutput, SelectionError> {
     let cost_per_input = calculate_fee(options.avg_input_weight, options.target_feerate)?;
     let cost_per_output = calculate_fee(options.avg_output_weight, options.target_feerate)?;
-    // let base_fee = calculate_fee(options.base_weight, options.target_feerate)?;
+    let base_fee = calculate_fee(options.base_weight, options.target_feerate)?;
 
     let mut sorted_inputs: Vec<(usize, &OutputGroup)> = inputs.iter().enumerate().collect();
     sorted_inputs.sort_by_key(|(_, input)| input.value);
 
     let mut ctx = BnbContext {
-        target_for_match: options.target_value + options.min_change_value,
+        target_for_match: options.target_value
+            + options.min_change_value
+            + base_fee.max(options.min_absolute_fee),
         match_range: cost_per_input + cost_per_output,
         options: options.clone(),
         tries: 1_000_000,
@@ -233,30 +235,7 @@ mod test {
         let ans = select_coin_bnb(&values, &opt);
         values.sort_by_key(|v| v.value);
         if let Ok(selection_output) = ans {
-            println!(
-                "Total value minus Target : {} - {} = {}",
-                selection_output
-                    .selected_inputs
-                    .iter()
-                    .map(|&i| values[i].value)
-                    .sum::<u64>(),
-                opt.target_value,
-                selection_output
-                    .selected_inputs
-                    .iter()
-                    .map(|&i| values[i].value)
-                    .sum::<u64>()
-                    - opt.target_value
-            );
-            println!(
-                "Selected inputs: {:?}",
-                selection_output
-                    .selected_inputs
-                    .iter()
-                    .map(|&i| (i, values[i].value))
-                    .collect::<Vec<_>>()
-            );
-            let expected_solution = vec![11, 8, 4, 2, 9];
+            let expected_solution = vec![1, 5, 11, 6, 4, 2, 9];
             assert_eq!(
                 selection_output.selected_inputs, expected_solution,
                 "Expected solution {:?}, but got {:?}",

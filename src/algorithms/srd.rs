@@ -14,6 +14,9 @@ pub fn select_coin_srd(
     // In out put we need to specify the indexes of the inputs in the given order
     // So keep track of the indexes when randomiz ing the vec
     let mut randomized_inputs: Vec<_> = inputs.iter().enumerate().collect();
+    let base_fees = calculate_fee(options.base_weight, options.target_feerate).unwrap_or_default();
+    let target =
+        options.target_value + options.min_change_value + base_fees.max(options.min_absolute_fee);
 
     // Randomize the inputs order to simulate the random draw
     let mut rng = thread_rng();
@@ -33,20 +36,12 @@ pub fn select_coin_srd(
 
         estimated_fee = calculate_fee(accumulated_weight, options.target_feerate)?;
 
-        if accumulated_value
-            >= options.target_value
-                + options.min_change_value
-                + estimated_fee.max(options.min_absolute_fee)
-        {
+        if accumulated_value >= target + estimated_fee {
             break;
         }
     }
 
-    if accumulated_value
-        < options.target_value
-            + options.min_change_value
-            + estimated_fee.max(options.min_absolute_fee)
-    {
+    if accumulated_value < target + estimated_fee {
         return Err(SelectionError::InsufficientFunds);
     }
     let waste = calculate_waste(
