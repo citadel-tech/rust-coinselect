@@ -20,6 +20,10 @@ pub fn select_coin(
     inputs: &[OutputGroup],
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
+    if options.target_value == 0 {
+        return Err(SelectionError::NonPositiveTarget);
+    }
+
     let mut results = vec![];
 
     let mut sorted_inputs = inputs.to_vec();
