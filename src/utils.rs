@@ -53,6 +53,7 @@ impl fmt::Display for SelectionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SelectionError::NonPositiveFeeRate => write!(f, "Negative fee rate"),
+            SelectionError::NonPositiveTarget => write!(f, "Target value must be positive"),
             SelectionError::AbnormallyHighFeeRate => write!(f, "Abnormally high fee rate"),
             SelectionError::InsufficientFunds => write!(f, "The Inputs funds are insufficient"),
             SelectionError::NoSolutionFound => write!(f, "No solution could be derived"),

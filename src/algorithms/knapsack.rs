@@ -1,20 +1,20 @@
 use crate::{
     types::{
-        CoinSelectionOpt, EffectiveValue, OutputGroup, SelectionError, SelectionOutput,
-        WasteMetric, Weight,
+        CoinSelectionOpt, EffectiveValue, OutputGroup, SelectionError, SelectionOutput, WasteMetric,
     },
-    utils::{calculate_accumulated_weight, calculate_fee, calculate_waste, effective_value},
+    utils::{calculate_fee, calculate_waste, effective_value},
 };
 use rand::{thread_rng, Rng};
-use std::{cmp::Reverse, collections::HashSet};
-
+use std::collections::HashSet;
 pub fn select_coin_knapsack(
     inputs: &[OutputGroup],
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
-    let adjusted_target = options.target_value
-        + options.min_change_value
-        + calculate_fee(options.base_weight, options.target_feerate).unwrap_or_default();
+    // Calculate base fees with no inputs
+    let base_fees = calculate_fee(options.base_weight, options.target_feerate).unwrap_or_default();
+    let adjusted_target =
+        options.target_value + options.min_change_value + base_fees.max(options.min_absolute_fee);
+
     let mut smaller_coins = inputs
         .iter()
         .enumerate()
@@ -22,73 +22,88 @@ pub fn select_coin_knapsack(
         .map(|(index, output_group)| {
             (
                 index,
-                effective_value(output_group, options.target_feerate),
+                output_group.value,
                 output_group.weight,
+                effective_value(output_group, options.target_feerate),
             )
         })
         .collect::<Vec<_>>();
-    smaller_coins.sort_by_key(|(_, value, _)| Reverse(*value));
+
+    // Sort by effective value descending
+    smaller_coins.sort_by(|(_, _, _, a), (_, _, _, b)| b.unwrap_or(0).cmp(&a.unwrap_or(0)));
+
     let smaller_coins: Vec<_> = smaller_coins
         .into_iter()
-        .filter_map(|(index, value, weight)| value.ok().map(|v| (index, v, weight)))
+        .filter_map(|(index, value, weight, eff_value)| {
+            eff_value.ok().map(|v| (index, value, weight, v))
+        })
         .collect();
-    knap_sack(adjusted_target, &smaller_coins, options)
+
+    knap_sack(&smaller_coins, adjusted_target, options)
 }
 
 fn knap_sack(
+    smaller_coins: &[(usize, u64, u64, EffectiveValue)],
     adjusted_target: u64,
-    smaller_coins: &[(usize, EffectiveValue, Weight)],
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
     let mut selected_inputs: HashSet<usize> = HashSet::new();
     let mut accumulated_value: u64 = 0;
+    let mut accumulated_weight: u64 = 0;
     let mut best_set: HashSet<usize> = HashSet::new();
     let mut best_set_value: u64 = u64::MAX;
+    let mut best_set_weight: u64 = 0;
     let mut rng = thread_rng();
+
     for _ in 1..=1000 {
         for pass in 1..=2 {
-            for &(index, value, _) in smaller_coins {
+            for &(index, value, weight, _eff_value) in smaller_coins {
                 let toss_result: bool = rng.gen_bool(0.5);
                 if (pass == 2 && !selected_inputs.contains(&index)) || (pass == 1 && toss_result) {
                     selected_inputs.insert(index);
                     accumulated_value += value;
-                    if accumulated_value == adjusted_target {
-                        let accumulated_weight =
-                            calculate_accumulated_weight(smaller_coins, &selected_inputs);
-                        let estimated_fees =
-                            calculate_fee(accumulated_weight, options.target_feerate);
-                        let index_vector: Vec<usize> = selected_inputs.into_iter().collect();
-                        let waste: u64 = calculate_waste(
+                    accumulated_weight += weight;
+
+                    // Calculate current fees and required value
+                    let estimated_fees = calculate_fee(accumulated_weight, options.target_feerate)?;
+                    let required_value = adjusted_target + estimated_fees;
+
+                    if accumulated_value == required_value {
+                        let waste = calculate_waste(
                             options,
                             accumulated_value,
                             accumulated_weight,
-                            estimated_fees?,
+                            estimated_fees,
                         );
+                        let index_vector: Vec<usize> = selected_inputs.into_iter().collect();
                         return Ok(SelectionOutput {
                             selected_inputs: index_vector,
                             waste: WasteMetric(waste),
                         });
-                    } else if accumulated_value >= adjusted_target {
+                    } else if accumulated_value >= required_value {
                         if accumulated_value < best_set_value {
                             best_set_value = accumulated_value;
+                            best_set_weight = accumulated_weight;
                             best_set.clone_from(&selected_inputs);
                         }
                         selected_inputs.remove(&index);
                         accumulated_value -= value;
+                        accumulated_weight -= weight;
                     }
                 }
             }
         }
         accumulated_value = 0;
+        accumulated_weight = 0;
         selected_inputs.clear();
     }
+
     if best_set_value == u64::MAX {
         Err(SelectionError::NoSolutionFound)
     } else {
-        let best_set_weight = calculate_accumulated_weight(smaller_coins, &best_set);
-        let estimated_fees = calculate_fee(best_set_weight, options.target_feerate);
+        let estimated_fees = calculate_fee(best_set_weight, options.target_feerate)?;
+        let waste = calculate_waste(options, best_set_value, best_set_weight, estimated_fees);
         let index_vector: Vec<usize> = best_set.into_iter().collect();
-        let waste: u64 = calculate_waste(options, best_set_value, best_set_weight, estimated_fees?);
         Ok(SelectionOutput {
             selected_inputs: index_vector,
             waste: WasteMetric(waste),

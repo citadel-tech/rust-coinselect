@@ -1,6 +1,6 @@
 use crate::{
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric},
-    utils::{calculate_fee, calculate_waste, effective_value},
+    utils::{calculate_fee, calculate_waste},
 };
 
 /// Struct MatchParameters encapsulates target_for_match, match_range, and target_feerate, options, tries, best solution.
@@ -8,7 +8,6 @@ use crate::{
 struct BnbContext {
     target_for_match: u64,
     match_range: u64,
-    target_feerate: f32,
     options: CoinSelectionOpt,
     tries: u32,
     best_solution: Option<(Vec<usize>, u64)>,
@@ -29,9 +28,10 @@ pub fn select_coin_bnb(
     sorted_inputs.sort_by_key(|(_, input)| input.value);
 
     let mut ctx = BnbContext {
-        target_for_match: options.target_value + base_fee,
+        target_for_match: options.target_value
+            + options.min_change_value
+            + base_fee.max(options.min_absolute_fee),
         match_range: cost_per_input + cost_per_output,
-        target_feerate: options.target_feerate,
         options: options.clone(),
         tries: 1_000_000,
         best_solution: None,
@@ -63,12 +63,21 @@ fn bnb(
     }
     ctx.tries -= 1;
 
-    if acc_value > ctx.target_for_match + ctx.match_range {
+    // Calculate current fee based on accumulated weight
+    let fee = calculate_fee(acc_weight, ctx.options.target_feerate)
+        .unwrap_or(ctx.options.min_absolute_fee);
+    // .max(ctx.options.min_absolute_fee);
+
+    // Calculate effective value after fees
+    let effective_value = acc_value.saturating_sub(fee);
+
+    // Prune if we're way over target (including change consideration)
+    if effective_value > ctx.target_for_match + ctx.match_range {
         return;
     }
 
-    if acc_value >= ctx.target_for_match {
-        let fee = 0;
+    // Check for valid solution (must cover target + min change)
+    if effective_value >= ctx.target_for_match {
         let waste = calculate_waste(&ctx.options, acc_value, acc_weight, fee);
         if ctx.best_solution.is_none() || waste < ctx.best_solution.as_ref().unwrap().1 {
             ctx.best_solution = Some((selected.clone(), waste));
@@ -77,19 +86,24 @@ fn bnb(
     }
 
     let (index, input) = sorted[depth];
-    let effective_val = effective_value(input, ctx.target_feerate).unwrap_or_default();
+    let input_effective_value = input.value.saturating_sub(
+        calculate_fee(input.weight, ctx.options.target_feerate)
+            .unwrap_or(ctx.options.min_absolute_fee),
+    );
 
+    // Branch 1: Include current input
     selected.push(index);
     bnb(
         sorted,
         selected,
-        acc_value + effective_val,
+        acc_value + input_effective_value,
         acc_weight + input.weight,
         depth + 1,
         ctx,
     );
     selected.pop();
 
+    // Branch 2: Exclude current input
     bnb(sorted, selected, acc_value, acc_weight, depth + 1, ctx);
 }
 
@@ -128,7 +142,7 @@ mod test {
             target_value,
             target_feerate: 0.5, // Simplified feerate
             long_term_feerate: None,
-            min_absolute_fee: 0,
+            min_absolute_fee: 500,
             base_weight: 10,
             change_weight: 50,
             change_cost: 10,
@@ -141,7 +155,7 @@ mod test {
 
     fn test_bnb_solution() {
         // Define the test values
-        let values = [
+        let mut values = [
             OutputGroup {
                 value: 55000,
                 weight: 500,
@@ -185,18 +199,43 @@ mod test {
                 creation_sequence: None,
             },
             OutputGroup {
-                value: 5000,
+                value: 94730,
                 weight: 50,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 29810,
+                weight: 500,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 78376,
+                weight: 200,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 17218,
+                weight: 300,
+                input_count: 1,
+                creation_sequence: None,
+            },
+            OutputGroup {
+                value: 13728,
+                weight: 100,
                 input_count: 1,
                 creation_sequence: None,
             },
         ];
 
         // Adjust the target value to ensure it tests for multiple valid solutions
-        let opt = bnb_setup_options(5730);
+        let opt = bnb_setup_options(195782);
         let ans = select_coin_bnb(&values, &opt);
+        values.sort_by_key(|v| v.value);
         if let Ok(selection_output) = ans {
-            let expected_solution = vec![1, 5, 7];
+            let expected_solution = vec![1, 5, 11, 6, 4, 2, 9];
             assert_eq!(
                 selection_output.selected_inputs, expected_solution,
                 "Expected solution {:?}, but got {:?}",

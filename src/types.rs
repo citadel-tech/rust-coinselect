@@ -89,6 +89,7 @@ pub enum ExcessStrategy {
 pub enum SelectionError {
     InsufficientFunds,
     NoSolutionFound,
+    NonPositiveTarget,
     NonPositiveFeeRate,
     AbnormallyHighFeeRate,
 }
