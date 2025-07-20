@@ -54,16 +54,20 @@ pub fn select_coin(
         return Err(SelectionError::InsufficientFunds);
     }
 
-    // println!("Coin selection results: {:?}", results);
+    println!("Coin selection results: {:?}", results);
 
     let best_result = results
         .into_iter()
         .min_by(|a, b| {
-            a.0.waste
-                .0
-                .cmp(&b.0.waste.0)
-                .then_with(|| a.1.cmp(&b.1))
+            a.1.cmp(&b.1) // Compare change amount first (a.1 vs b.1)
+                .then_with(|| {
+                    a.0.waste
+                        .0
+                        .partial_cmp(&b.0.waste.0)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                }) // Then compare waste
                 .then_with(|| a.0.selected_inputs.len().cmp(&b.0.selected_inputs.len()))
+            // Finally compare number of inputs
         })
         .map(|(result, _, _)| result)
         .expect("No selection results found");

@@ -9,25 +9,20 @@ pub fn calculate_waste(
     accumulated_value: u64,
     accumulated_weight: u64,
     estimated_fee: u64,
-) -> u64 {
+) -> f32 {
     // waste =  weight*(target feerate - long term fee rate) + cost of change + excess
     // weight - total weight of selected inputs
     // cost of change - includes the fees paid on this transaction's change output plus the fees that will need to be paid to spend it later. If there is no change output, the cost is 0.
     // excess - refers to the difference between the sum of selected inputs and the amount we need to pay (the sum of output values and fees). There shouldn’t be any excess if there is a change output.
 
-    let mut waste: u64 = 0;
-    if let Some(long_term_feerate) = options.long_term_feerate {
-        waste = (accumulated_weight as f32 * (options.target_feerate - long_term_feerate)).ceil()
-            as u64;
-    }
-    if options.excess_strategy != ExcessStrategy::ToChange {
-        // Change is created if excess strategy is set to ToChange. Hence 'excess' should be set to 0
-        waste += accumulated_value
-            .saturating_sub(options.target_value)
-            .saturating_sub(estimated_fee);
+    let mut waste = accumulated_weight as f32
+        * (options.target_feerate - options.long_term_feerate.unwrap_or(0.0));
+    if options.excess_strategy == ExcessStrategy::ToChange {
+        // Change is created if excess strategy is set to ToChange. Hence cost of change is added.
+        waste += options.change_cost as f32;
     } else {
-        // Change is not created if excess strategy is ToFee or ToRecipient. Hence cost of change is added
-        waste += options.change_cost;
+        // Change is not created if excess strategy is ToFee or ToRecipient. Hence check 'excess' that's been passed ahead.
+        waste += (accumulated_value.saturating_sub(options.target_value + estimated_fee)) as f32;
     }
     waste
 }
@@ -287,7 +282,7 @@ mod tests {
             accumulated_value: u64,
             accumulated_weight: u64,
             estimated_fee: u64,
-            result: u64,
+            result: f32,
         }
 
         let options = setup_options(100).clone();
@@ -298,7 +293,7 @@ mod tests {
                 accumulated_value: 1000,
                 accumulated_weight: 50,
                 estimated_fee: 20,
-                result: options.change_cost,
+                result: options.change_cost as f32,
             },
             // Test for excess strategy to miners
             TestVector {
@@ -309,7 +304,7 @@ mod tests {
                 accumulated_value: 1000,
                 accumulated_weight: 50,
                 estimated_fee: 20,
-                result: 880,
+                result: 880.0,
             },
             // Test accumulated_value minus target_value < 0
             TestVector {
@@ -321,7 +316,7 @@ mod tests {
                 accumulated_value: 200,
                 accumulated_weight: 50,
                 estimated_fee: 20,
-                result: 0,
+                result: 0.0,
             },
         ];
 
