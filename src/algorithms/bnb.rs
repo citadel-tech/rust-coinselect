@@ -10,7 +10,7 @@ struct BnbContext {
     match_range: u64,
     options: CoinSelectionOpt,
     tries: u32,
-    best_solution: Option<(Vec<usize>, u64)>,
+    best_solution: Option<(Vec<usize>, f32)>,
     // Used as a solution to Clippy's `Too Many Arguments` Warn.
     // https://rust-lang.github.io/rust-clippy/master/#too_many_arguments
 }

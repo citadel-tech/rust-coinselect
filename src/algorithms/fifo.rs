@@ -48,7 +48,7 @@ pub fn select_coin_fifo(
     if accumulated_value < target + estimated_fees {
         Err(SelectionError::InsufficientFunds)
     } else {
-        let waste: u64 = calculate_waste(
+        let waste: f32 = calculate_waste(
             options,
             accumulated_value,
             accumulated_weight,

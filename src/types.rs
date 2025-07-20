@@ -101,7 +101,7 @@ pub enum SelectionError {
 /// In low fee rate environments, selecting more inputs reduces overall fees.
 /// It compares various selection algorithms to find the most optimized solution, represented by the lowest [WasteMetric] value.
 #[derive(Debug)]
-pub struct WasteMetric(pub u64);
+pub struct WasteMetric(pub f32);
 
 /// The result of selection algorithm.
 #[derive(Debug)]
