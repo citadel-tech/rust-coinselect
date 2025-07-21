@@ -20,6 +20,10 @@ pub fn select_coin(
     inputs: &[OutputGroup],
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
+    if options.target_value == 0 {
+        return Err(SelectionError::NonPositiveTarget);
+    }
+
     let mut results = vec![];
 
     let mut sorted_inputs = inputs.to_vec();
@@ -53,11 +57,15 @@ pub fn select_coin(
     let best_result = results
         .into_iter()
         .min_by(|a, b| {
-            a.0.waste
-                .0
-                .cmp(&b.0.waste.0)
-                .then_with(|| a.1.cmp(&b.1))
+            a.1.cmp(&b.1) // Compare change amount first (a.1 vs b.1)
+                .then_with(|| {
+                    a.0.waste
+                        .0
+                        .partial_cmp(&b.0.waste.0)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                }) // Then compare waste
                 .then_with(|| a.0.selected_inputs.len().cmp(&b.0.selected_inputs.len()))
+            // Finally compare number of inputs
         })
         .map(|(result, _, _)| result)
         .expect("No selection results found");
@@ -422,7 +430,7 @@ mod test {
     }
 
     #[test]
-    fn test_select_coin_leastchange_change() {
+    fn test_select_coin_equals_leastchange_bnb() {
         // Inputs designed so that only one combination gives minimal change
         let inputs = vec![
             OutputGroup {
@@ -458,7 +466,7 @@ mod test {
         ];
 
         let options = CoinSelectionOpt {
-            target_value: 4500,
+            target_value: 12000,
             target_feerate: 1.0,
             min_absolute_fee: 0,
             base_weight: 100,
@@ -478,7 +486,6 @@ mod test {
 
         let mut selected = selection_output.selected_inputs.clone();
         selected.sort();
-        // Initially chooses Input indexed 3 from the input list due to starting in descending order, then DFS stack order.
-        assert_eq!(selected, vec![0, 3]);
+        assert_eq!(selected, vec![0, 2, 3, 4]);
     }
 }
