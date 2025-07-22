@@ -1,6 +1,6 @@
 use crate::{
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric},
-    utils::{calculate_fee, calculate_waste},
+    utils::{calculate_fee, calculate_waste, sum},
 };
 
 /// Struct MatchParameters encapsulates target_for_match, match_range, and target_feerate, options, tries, best solution.
@@ -28,10 +28,11 @@ pub fn select_coin_bnb(
     sorted_inputs.sort_by_key(|(_, input)| input.value);
 
     let mut ctx = BnbContext {
-        target_for_match: options.target_value
-            + options.min_change_value
-            + base_fee.max(options.min_absolute_fee),
-        match_range: cost_per_input + cost_per_output,
+        target_for_match: sum(
+            sum(options.target_value, options.min_change_value)?,
+            base_fee.max(options.min_absolute_fee),
+        )?,
+        match_range: sum(cost_per_input, cost_per_output)?,
         options: options.clone(),
         tries: 1_000_000,
         best_solution: None,
@@ -39,7 +40,7 @@ pub fn select_coin_bnb(
 
     let mut selected_inputs = vec![];
 
-    bnb(&sorted_inputs, &mut selected_inputs, 0, 0, 0, &mut ctx);
+    bnb(&sorted_inputs, &mut selected_inputs, 0, 0, 0, &mut ctx)?;
 
     match ctx.best_solution {
         Some((selected, waste)) => Ok(SelectionOutput {
@@ -57,9 +58,9 @@ fn bnb(
     acc_weight: u64,
     depth: usize,
     ctx: &mut BnbContext,
-) {
+) -> Result<(), SelectionError> {
     if ctx.tries == 0 || depth >= sorted.len() {
-        return;
+        return Ok(());
     }
     ctx.tries -= 1;
 
@@ -72,8 +73,8 @@ fn bnb(
     let effective_value = acc_value.saturating_sub(fee);
 
     // Prune if we're way over target (including change consideration)
-    if effective_value > ctx.target_for_match + ctx.match_range {
-        return;
+    if effective_value > sum(ctx.target_for_match, ctx.match_range)? {
+        return Ok(());
     }
 
     // Check for valid solution (must cover target + min change)
@@ -82,7 +83,7 @@ fn bnb(
         if ctx.best_solution.is_none() || waste < ctx.best_solution.as_ref().unwrap().1 {
             ctx.best_solution = Some((selected.clone(), waste));
         }
-        return;
+        return Ok(());
     }
 
     let (index, input) = sorted[depth];
@@ -96,15 +97,15 @@ fn bnb(
     bnb(
         sorted,
         selected,
-        acc_value + input_effective_value,
-        acc_weight + input.weight,
+        sum(acc_value, input_effective_value)?,
+        sum(acc_weight, input.weight)?,
         depth + 1,
         ctx,
-    );
+    )?;
     selected.pop();
 
     // Branch 2: Exclude current input
-    bnb(sorted, selected, acc_value, acc_weight, depth + 1, ctx);
+    bnb(sorted, selected, acc_value, acc_weight, depth + 1, ctx)
 }
 
 #[cfg(test)]

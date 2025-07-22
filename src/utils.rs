@@ -43,6 +43,11 @@ pub fn calculate_accumulated_weight(
     }
     accumulated_weight
 }
+/// sugar to return a SelectionError when overflowing
+pub fn sum(a: u64, b: u64) -> Result<u64> {
+    a.checked_add(b)
+        .ok_or_else(|| SelectionError::AbnormallyHighAmount)
+}
 
 impl fmt::Display for SelectionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -52,6 +57,7 @@ impl fmt::Display for SelectionError {
             SelectionError::AbnormallyHighFeeRate => write!(f, "Abnormally high fee rate"),
             SelectionError::InsufficientFunds => write!(f, "The Inputs funds are insufficient"),
             SelectionError::NoSolutionFound => write!(f, "No solution could be derived"),
+            SelectionError::AbnormallyHighAmount => write!(f, "Abnormally high amount"),
         }
     }
 }

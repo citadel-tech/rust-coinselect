@@ -1,6 +1,6 @@
 use crate::{
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric},
-    utils::{calculate_fee, calculate_waste},
+    utils::{calculate_fee, calculate_waste, sum},
 };
 
 /// Performs coin selection using the First-In-First-Out (FIFO) algorithm.
@@ -15,8 +15,10 @@ pub fn select_coin_fifo(
     let mut selected_inputs: Vec<usize> = Vec::new();
     let mut estimated_fees: u64 = 0;
     let base_fees = calculate_fee(options.base_weight, options.target_feerate).unwrap_or_default();
-    let target =
-        options.target_value + options.min_change_value + base_fees.max(options.min_absolute_fee);
+    let target = sum(
+        sum(options.target_value, options.min_change_value)?,
+        base_fees.max(options.min_absolute_fee),
+    )?;
 
     // Sorting the inputs vector based on creation_sequence
     let mut sorted_inputs: Vec<_> = inputs
@@ -36,16 +38,15 @@ pub fn select_coin_fifo(
     sorted_inputs.extend(inputs_without_sequence);
 
     for (index, inputs) in sorted_inputs {
-        estimated_fees =
-            calculate_fee(accumulated_weight, options.target_feerate).unwrap_or_default();
-        if accumulated_value >= target + estimated_fees {
+        estimated_fees = calculate_fee(accumulated_weight, options.target_feerate)?;
+        if accumulated_value >= sum(target, estimated_fees)? {
             break;
         }
-        accumulated_value += inputs.value;
-        accumulated_weight += inputs.weight;
+        accumulated_value = sum(accumulated_value, inputs.value)?;
+        accumulated_weight = sum(accumulated_weight, inputs.weight)?;
         selected_inputs.push(index);
     }
-    if accumulated_value < target + estimated_fees {
+    if accumulated_value < sum(target, estimated_fees)? {
         Err(SelectionError::InsufficientFunds)
     } else {
         let waste: f32 = calculate_waste(
