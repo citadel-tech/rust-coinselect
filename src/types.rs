@@ -1,3 +1,5 @@
+#[cfg(test)]
+use test_strategy::Arbitrary;
 /// Represents an input candidate for Coinselection, either as a single UTXO or a group of UTXOs.
 ///
 /// A [`OutputGroup`] can be a single UTXO or a group that should be spent together.
@@ -5,6 +7,7 @@
 /// In the UTXO model the output of a transaction is used as the input for the new transaction and hence the name [`OutputGroup`]
 /// The library user must craft this structure correctly, as incorrect representation can lead to incorrect selection results.
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct OutputGroup {
     /// Total value of the UTXO(s) that this `WeightedValue` represents.
     pub value: u64,
@@ -24,6 +27,7 @@ pub struct OutputGroup {
 
 /// Options required to compute fees and waste metric.
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct CoinSelectionOpt {
     /// The value we need to select.
     pub target_value: u64,
@@ -68,6 +72,7 @@ pub struct CoinSelectionOpt {
 
 /// Strategy to decide what to do with the excess amount.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(test_strategy::Arbitrary))]
 pub enum ExcessStrategy {
     /// Adds the excess amount to the transaction fee. This increases the fee rate
     /// and may lead to faster confirmation, but wastes the excess amount.

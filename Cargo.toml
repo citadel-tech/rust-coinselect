@@ -16,6 +16,8 @@ rand = "0.8.5"
 
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"] }
+proptest = "1.7"
+test-strategy = "0.4"
 
 #Empty default feature set, (helpful to generalise in github actions)
 [features]
@@ -48,3 +50,6 @@ harness = false
 [[bench]]
 name = "benches_leastchange"
 harness = false
+
+[profile.test]
+opt-level = 3
