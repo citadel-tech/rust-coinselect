@@ -2,7 +2,7 @@ use std::vec;
 
 use crate::{
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric},
-    utils::{calculate_fee, calculate_waste, effective_value},
+    utils::{calculate_fee, calculate_waste, effective_value, sum},
 };
 
 /// A Branch and Bound state for Least Change selection which stores the state while traversing the tree.
@@ -21,8 +21,10 @@ pub fn select_coin_bnb_leastchange(
 ) -> Result<SelectionOutput, SelectionError> {
     let mut best: Option<(Vec<usize>, u64, usize)> = None; // (selection, change, count)
     let base_fees = calculate_fee(options.base_weight, options.target_feerate).unwrap_or_default();
-    let target =
-        options.target_value + options.min_change_value + base_fees.max(options.min_absolute_fee);
+    let target = sum(
+        sum(options.target_value, options.min_change_value)?,
+        base_fees.max(options.min_absolute_fee),
+    )?;
 
     // Precompute net values and filter beneficial inputs
     let mut filtered = inputs
@@ -43,7 +45,7 @@ pub fn select_coin_bnb_leastchange(
     let n = filtered.len();
     let mut remaining_net = vec![0; n + 1];
     for i in (0..n).rev() {
-        remaining_net[i] = remaining_net[i + 1] + filtered[i].1;
+        remaining_net[i] = sum(remaining_net[sum(i as u64, 1)? as usize], filtered[i].1)?;
     }
 
     // DFS with BnB pruning
@@ -61,7 +63,7 @@ pub fn select_coin_bnb_leastchange(
         }
 
         // Prune if impossible to reach target
-        if state.current_eff_value + remaining_net[state.index] < target {
+        if sum(state.current_eff_value, remaining_net[state.index])? < target {
             continue;
         }
 
@@ -74,15 +76,15 @@ pub fn select_coin_bnb_leastchange(
         });
 
         let (orig_idx, net_value, weight) = filtered[state.index];
-        let new_eff_value = state.current_eff_value + net_value;
+        let new_eff_value = sum(state.current_eff_value, net_value)?;
         let mut new_selection = state.current_selection.clone();
         new_selection.push(orig_idx);
         let new_count = state.current_count + 1;
-        let new_weight = state.current_weight + weight;
+        let new_weight = sum(state.current_weight, weight)?;
 
         // Calculate fees based on current selection
         let estimated_fees = calculate_fee(new_weight, options.target_feerate).unwrap_or(0);
-        let required_value = target + estimated_fees;
+        let required_value = sum(target, estimated_fees)?;
         if new_eff_value >= required_value {
             let change = new_eff_value - required_value;
             let update = match best {

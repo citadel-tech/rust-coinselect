@@ -92,6 +92,7 @@ pub enum SelectionError {
     NonPositiveTarget,
     NonPositiveFeeRate,
     AbnormallyHighFeeRate,
+    AbnormallyHighAmount,
 }
 
 /// Measures the efficiency of input selection in satoshis, helping evaluate algorithms based on current and long-term fee rates

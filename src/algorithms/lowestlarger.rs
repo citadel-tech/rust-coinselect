@@ -1,6 +1,6 @@
 use crate::{
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric},
-    utils::{calculate_fee, calculate_waste, effective_value},
+    utils::{calculate_fee, calculate_waste, effective_value, sum},
 };
 
 /// Performs coin selection using the Lowest Larger algorithm.
@@ -14,43 +14,49 @@ pub fn select_coin_lowestlarger(
     let mut accumulated_weight: u64 = 0;
     let mut selected_inputs: Vec<usize> = Vec::new();
     let mut estimated_fees: u64 = 0;
-    let base_fees = calculate_fee(options.base_weight, options.target_feerate).unwrap_or_default();
-    let target =
-        options.target_value + options.min_change_value + base_fees.max(options.min_absolute_fee);
+    let base_fees = calculate_fee(options.base_weight, options.target_feerate)?;
+    let target = sum(
+        sum(options.target_value, options.min_change_value)?,
+        base_fees.max(options.min_absolute_fee),
+    )?;
 
     let mut sorted_inputs: Vec<_> = inputs.iter().enumerate().collect();
     sorted_inputs.sort_by_key(|(_, input)| effective_value(input, options.target_feerate));
 
     let index = sorted_inputs.partition_point(|(_, input)| {
-        input.value
-            <= (target + calculate_fee(input.weight, options.target_feerate).unwrap_or_default())
+        if let Ok(fee) = calculate_fee(input.weight, options.target_feerate) {
+            if let Ok(target_and_fee) = sum(target, fee) {
+                return input.value <= target_and_fee;
+            }
+        }
+        false
     });
 
     for (idx, input) in sorted_inputs.iter().take(index).rev() {
-        accumulated_value += input.value;
-        accumulated_weight += input.weight;
+        accumulated_value = sum(accumulated_value, input.value)?;
+        accumulated_weight = sum(accumulated_weight, input.weight)?;
         estimated_fees = calculate_fee(accumulated_weight, options.target_feerate)?;
         selected_inputs.push(*idx);
 
-        if accumulated_value >= (target + estimated_fees) {
+        if accumulated_value >= sum(target, estimated_fees)? {
             break;
         }
     }
 
-    if accumulated_value < (target + estimated_fees) {
+    if accumulated_value < sum(target, estimated_fees)? {
         for (idx, input) in sorted_inputs.iter().skip(index) {
-            accumulated_value += input.value;
-            accumulated_weight += input.weight;
+            accumulated_value = sum(accumulated_value, input.value)?;
+            accumulated_weight = sum(accumulated_weight, input.weight)?;
             estimated_fees = calculate_fee(accumulated_weight, options.target_feerate)?;
             selected_inputs.push(*idx);
 
-            if accumulated_value >= (target + estimated_fees.max(options.min_absolute_fee)) {
+            if accumulated_value >= sum(target, estimated_fees.max(options.min_absolute_fee))? {
                 break;
             }
         }
     }
 
-    if accumulated_value < (target + estimated_fees) {
+    if accumulated_value < sum(target, estimated_fees)? {
         Err(SelectionError::InsufficientFunds)
     } else {
         let waste: f32 = calculate_waste(

@@ -1,6 +1,6 @@
 use crate::{
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric},
-    utils::{calculate_fee, calculate_waste},
+    utils::{calculate_fee, calculate_waste, sum},
 };
 use rand::{seq::SliceRandom, thread_rng};
 
@@ -15,33 +15,35 @@ pub fn select_coin_srd(
     // So keep track of the indexes when randomiz ing the vec
     let mut randomized_inputs: Vec<_> = inputs.iter().enumerate().collect();
     let base_fees = calculate_fee(options.base_weight, options.target_feerate).unwrap_or_default();
-    let target =
-        options.target_value + options.min_change_value + base_fees.max(options.min_absolute_fee);
+    let target = sum(
+        sum(options.target_value, options.min_change_value)?,
+        base_fees.max(options.min_absolute_fee),
+    )?;
 
     // Randomize the inputs order to simulate the random draw
     let mut rng = thread_rng();
     randomized_inputs.shuffle(&mut rng);
 
-    let mut accumulated_value = 0;
+    let mut accumulated_value: u64 = 0;
     let mut selected_inputs = Vec::new();
-    let mut accumulated_weight = 0;
+    let mut accumulated_weight: u64 = 0;
     let mut estimated_fee = 0;
     let mut _input_counts = 0;
 
     for (index, input) in randomized_inputs {
         selected_inputs.push(index);
-        accumulated_value += input.value;
-        accumulated_weight += input.weight;
-        _input_counts += input.input_count;
+        accumulated_value = sum(accumulated_value, input.value)?;
+        accumulated_weight = sum(accumulated_weight, input.weight)?;
+        _input_counts = sum(_input_counts, input.input_count as u64)?;
 
         estimated_fee = calculate_fee(accumulated_weight, options.target_feerate)?;
 
-        if accumulated_value >= target + estimated_fee {
+        if accumulated_value >= sum(target, estimated_fee)? {
             break;
         }
     }
 
-    if accumulated_value < target + estimated_fee {
+    if accumulated_value < sum(target, estimated_fee)? {
         return Err(SelectionError::InsufficientFunds);
     }
     let waste = calculate_waste(

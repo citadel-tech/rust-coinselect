@@ -2,7 +2,7 @@ use crate::{
     types::{
         CoinSelectionOpt, EffectiveValue, OutputGroup, SelectionError, SelectionOutput, WasteMetric,
     },
-    utils::{calculate_fee, calculate_waste, effective_value},
+    utils::{calculate_fee, calculate_waste, effective_value, sum},
 };
 use rand::{thread_rng, Rng};
 use std::collections::HashSet;
@@ -11,9 +11,11 @@ pub fn select_coin_knapsack(
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
     // Calculate base fees with no inputs
-    let base_fees = calculate_fee(options.base_weight, options.target_feerate).unwrap_or_default();
-    let adjusted_target =
-        options.target_value + options.min_change_value + base_fees.max(options.min_absolute_fee);
+    let base_fees = calculate_fee(options.base_weight, options.target_feerate)?;
+    let adjusted_target = sum(
+        sum(options.target_value, options.min_change_value)?,
+        base_fees.max(options.min_absolute_fee),
+    )?;
 
     let mut smaller_coins = inputs
         .iter()
@@ -61,12 +63,12 @@ fn knap_sack(
                 let toss_result: bool = rng.gen_bool(0.5);
                 if (pass == 2 && !selected_inputs.contains(&index)) || (pass == 1 && toss_result) {
                     selected_inputs.insert(index);
-                    accumulated_value += value;
-                    accumulated_weight += weight;
+                    accumulated_value = sum(accumulated_value, value)?;
+                    accumulated_weight = sum(accumulated_weight, weight)?;
 
                     // Calculate current fees and required value
                     let estimated_fees = calculate_fee(accumulated_weight, options.target_feerate)?;
-                    let required_value = adjusted_target + estimated_fees;
+                    let required_value = sum(adjusted_target, estimated_fees)?;
 
                     if accumulated_value == required_value {
                         let waste = calculate_waste(
