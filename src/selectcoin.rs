@@ -79,8 +79,28 @@ mod test {
     use crate::{
         selectcoin::select_coin,
         types::{CoinSelectionOpt, ExcessStrategy, OutputGroup, SelectionError},
+        utils::effective_value,
     };
-
+    use proptest::prop_assert;
+    use test_strategy::proptest;
+    #[proptest]
+    fn solutions_fulfill_target(inputs: Vec<OutputGroup>, opts: CoinSelectionOpt) {
+        let result = select_coin(&inputs, &opts);
+        if let Ok(selection) = result {
+            let index = selection.selected_inputs;
+            let mut selected_inputs = vec![];
+            for i in index {
+                selected_inputs.push(&inputs[i]);
+            }
+            let total_effective_sum = selected_inputs
+                .iter()
+                .filter_map(|o| effective_value(o, opts.target_feerate).ok())
+                .collect::<Vec<u64>>()
+                .iter()
+                .sum::<u64>();
+            prop_assert!(total_effective_sum >= opts.target_value);
+        }
+    }
     fn setup_basic_output_groups() -> Vec<OutputGroup> {
         vec![
             OutputGroup {
