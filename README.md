@@ -69,7 +69,7 @@ For full API documentation, please visit [docs.rs/rust-coinselect](https://docs.
 
 ## Community
 
-The dev community gathers in a small corner of Discord [here](https://discord.gg/TSSAB3g4Zf) (say hello if you drop there from this readme).
+The dev community gathers in a small corner of Discord [here](https://discord.gg/n9bjkZk9eB) (say hello if you drop there from this readme).
 
 Dev discussions predominantly happen via FOSS (Free and Open-Source Software) best practices, and by using GitHub as the Community Forum.
 
