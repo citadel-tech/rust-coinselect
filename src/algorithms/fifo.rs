@@ -36,14 +36,17 @@ pub fn select_coin_fifo(
     sorted_inputs.extend(inputs_without_sequence);
 
     for (index, inputs) in sorted_inputs {
-        estimated_fees =
-            calculate_fee(accumulated_weight, options.target_feerate).unwrap_or_default();
-        if accumulated_value >= target + estimated_fees {
-            break;
-        }
         accumulated_value += inputs.value;
         accumulated_weight += inputs.weight;
         selected_inputs.push(index);
+        estimated_fees =
+            calculate_fee(accumulated_weight, options.target_feerate).unwrap_or_default();
+
+        println!("FIFO : Acc_value : {accumulated_value} and Fee : {estimated_fees} and total Target : {} and change : {}", target + estimated_fees, accumulated_value.saturating_sub(target + estimated_fees));
+
+        if accumulated_value >= target + estimated_fees {
+            break;
+        }
     }
     if accumulated_value < target + estimated_fees {
         Err(SelectionError::InsufficientFunds)
