@@ -1,30 +1,30 @@
-use crate::types::{
-    CoinSelectionOpt, EffectiveValue, ExcessStrategy, OutputGroup, SelectionError, Weight,
-};
+use crate::types::{CoinSelectionOpt, EffectiveValue, ExcessStrategy, SelectionError, Weight};
 use std::{collections::HashSet, fmt};
 
+/// Computes the total fee and waste metric (in satoshis) for a selection.
+///
+/// waste = weight * (target_feerate - long_term_feerate) + (cost_of_change OR excess)
 #[inline]
-pub fn calculate_waste(
+pub fn calculate_fee_and_waste(
     options: &CoinSelectionOpt,
-    accumulated_value: u64,
+    accumulated_value_with_fee: u64,
     accumulated_weight: u64,
-    estimated_fee: u64,
-) -> f32 {
-    // waste =  weight*(target feerate - long term fee rate) + cost of change + excess
-    // weight - total weight of selected inputs
-    // cost of change - includes the fees paid on this transaction's change output plus the fees that will need to be paid to spend it later. If there is no change output, the cost is 0.
-    // excess - refers to the difference between the sum of selected inputs and the amount we need to pay (the sum of output values and fees). There shouldn’t be any excess if there is a change output.
-
-    let mut waste = accumulated_weight as f32
-        * (options.target_feerate - options.long_term_feerate.unwrap_or(0.0));
-    if options.excess_strategy == ExcessStrategy::ToChange {
-        // Change is created if excess strategy is set to ToChange. Hence cost of change is added.
-        waste += options.change_cost as f32;
+) -> Result<(u64, i64)> {
+    let base_fee =
+        calculate_fee(options.base_weight, options.target_feerate)?.max(options.min_absolute_fee);
+    let input_fee = calculate_fee(accumulated_weight, options.target_feerate)?;
+    let long_term_feerate = options.long_term_feerate.unwrap_or(options.target_feerate);
+    let fee_difference = (options.target_feerate - long_term_feerate) as f64;
+    let mut waste = (accumulated_weight as f64 * fee_difference).round() as i64;
+    let excess = accumulated_value_with_fee.saturating_sub(options.target_value + base_fee);
+    if options.excess_strategy == ExcessStrategy::ToChange && excess >= options.min_change_value {
+        // A change output is actually created, so we pay its cost (now and when spent later).
+        waste += options.change_cost as i64;
     } else {
-        // Change is not created if excess strategy is ToFee or ToRecipient. Hence check 'excess' that's been passed ahead.
-        waste += (accumulated_value.saturating_sub(options.target_value + estimated_fee)) as f32;
+        // No change output is created; whatever is left over is wasted to fees/recipient.
+        waste += excess as i64;
     }
-    waste
+    Ok((base_fee + input_fee, waste))
 }
 
 /// `adjusted_target` is the target value plus the estimated fee.
@@ -71,33 +71,10 @@ pub fn calculate_fee(weight: u64, rate: f32) -> Result<u64> {
     }
 }
 
-/// Returns the effective value of the `OutputGroup`, which is the actual value minus the estimated fee.
-#[inline]
-pub fn effective_value(output: &OutputGroup, feerate: f32) -> Result<u64> {
-    Ok(output
-        .value
-        .saturating_sub(calculate_fee(output.weight, feerate)?))
-}
-
-/// Returns the weights of data in transaction other than the list of inputs that would be selected.
-pub fn calculate_base_weight_btc(output_weight: u64) -> u64 {
-    // VERSION_SIZE: 4 bytes - 16 WU
-    // SEGWIT_MARKER_SIZE: 2 bytes - 2 WU
-    // NUM_INPUTS_SIZE: 1 byte - 4 WU
-    // NUM_OUTPUTS_SIZE: 1 byte - 4 WU
-    // NUM_WITNESS_SIZE: 1 byte - 1 WU
-    // LOCK_TIME_SIZE: 4 bytes - 16 WU
-    // OUTPUT_VALUE_SIZE: variable
-
-    // Total default: (16 + 2 + 4 + 4 + 1 + 16 = 43 WU + variable) WU
-    // Source - https://docs.rs/bitcoin/latest/src/bitcoin/blockdata/transaction.rs.html#599-602
-    output_weight + 43
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CoinSelectionOpt, ExcessStrategy, OutputGroup, SelectionError};
+    use crate::types::{CoinSelectionOpt, ExcessStrategy, SelectionError};
 
     fn setup_options(target_value: u64) -> CoinSelectionOpt {
         CoinSelectionOpt {
@@ -169,99 +146,6 @@ mod tests {
         }
     }
 
-    /// Tests the effective value calculation which determines the actual spendable amount
-    /// of a UTXO after subtracting the fee required to spend it.
-    ///
-    /// Effective value is crucial for coin selection as it helps:
-    /// - Avoid selecting UTXOs that cost more in fees than their value
-    /// - Compare UTXOs based on their true spendable amount
-    /// - Calculate the actual amount available for spending
-    ///
-    /// Test vectors cover:
-    /// - Edge case where fees exceed UTXO value
-    /// - Normal case with positive effective value
-    /// - Error cases with invalid fee rates
-    /// - Large value UTXO calculations
-    #[test]
-    fn test_effective_value() {
-        struct TestVector {
-            output: OutputGroup,
-            feerate: f32,
-            result: Result<u64>,
-        }
-
-        let test_vectors = [
-            // Value minus weight would be less Than Zero but will return zero because of saturating_subtraction for u64
-            TestVector {
-                output: OutputGroup {
-                    value: 100,
-                    weight: 101,
-                    input_count: 1,
-                    creation_sequence: None,
-                },
-                feerate: 1.0,
-                result: Ok(0),
-            },
-            // Value greater than zero
-            TestVector {
-                output: OutputGroup {
-                    value: 100,
-                    weight: 99,
-                    input_count: 1,
-                    creation_sequence: None,
-                },
-                feerate: 1.0,
-                result: Ok(1),
-            },
-            // Test negative fee rate return appropriate error
-            TestVector {
-                output: OutputGroup {
-                    value: 100,
-                    weight: 99,
-                    input_count: 1,
-                    creation_sequence: None,
-                },
-                feerate: -1.0,
-                result: Err(SelectionError::NonPositiveFeeRate),
-            },
-            // Test very high fee rate
-            TestVector {
-                output: OutputGroup {
-                    value: 100,
-                    weight: 99,
-                    input_count: 1,
-                    creation_sequence: None,
-                },
-                feerate: 2000.0,
-                result: Err(SelectionError::AbnormallyHighFeeRate),
-            },
-            // Test high value
-            TestVector {
-                output: OutputGroup {
-                    value: 100_000_000_000,
-                    weight: 10,
-                    input_count: 1,
-                    creation_sequence: None,
-                },
-                feerate: 1.0,
-                result: Ok(99_999_999_990),
-            },
-        ];
-
-        for vector in test_vectors {
-            let effective_value = effective_value(&vector.output, vector.feerate);
-
-            match effective_value {
-                Ok(val) => {
-                    assert_eq!(Ok(val), vector.result)
-                }
-                Err(err) => {
-                    assert_eq!(err, vector.result.unwrap_err());
-                }
-            }
-        }
-    }
-
     /// Tests the waste metric calculation which helps optimize coin selection.
     /// Waste represents the cost of creating a change output plus any excess amount
     /// that goes to fees or is added to recipient outputs.
@@ -276,13 +160,13 @@ mod tests {
     /// - Fee payment (ToFee strategy)
     /// - Insufficient funds scenario
     #[test]
-    fn test_calculate_waste() {
+    fn test_calculate_fee_and_waste() {
         struct TestVector {
             options: CoinSelectionOpt,
             accumulated_value: u64,
             accumulated_weight: u64,
-            estimated_fee: u64,
-            result: f32,
+            fee: u64,
+            result: i64,
         }
 
         let options = setup_options(100).clone();
@@ -292,8 +176,8 @@ mod tests {
                 options: options.clone(),
                 accumulated_value: 1000,
                 accumulated_weight: 50,
-                estimated_fee: 20,
-                result: options.change_cost as f32,
+                fee: 24,
+                result: options.change_cost as i64,
             },
             // Test for excess strategy to miners
             TestVector {
@@ -303,8 +187,8 @@ mod tests {
                 },
                 accumulated_value: 1000,
                 accumulated_weight: 50,
-                estimated_fee: 20,
-                result: 880.0,
+                fee: 24,
+                result: 896,
             },
             // Test accumulated_value minus target_value < 0
             TestVector {
@@ -315,19 +199,20 @@ mod tests {
                 },
                 accumulated_value: 200,
                 accumulated_weight: 50,
-                estimated_fee: 20,
-                result: 0.0,
+                fee: 24,
+                result: 0,
             },
         ];
 
         for vector in test_vectors {
-            let waste = calculate_waste(
+            let (fee, waste) = calculate_fee_and_waste(
                 &vector.options,
                 vector.accumulated_value,
                 vector.accumulated_weight,
-                vector.estimated_fee,
-            );
+            )
+            .unwrap();
 
+            assert_eq!(fee, vector.fee);
             assert_eq!(waste, vector.result)
         }
     }

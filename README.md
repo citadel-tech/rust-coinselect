@@ -8,13 +8,12 @@ The library performs coin selection via various algorithms through a well-docume
 
 The following algorithms are implemented from scratch in Rust:
 
-- Knapsack
-- Branch and Bound
+- Branch and Bound (a port of Bitcoin Core's `SelectCoinsBnB`)
 - Lowest Larger
 - First-In-First-Out
-- Single-Random-Draw
+- Least-Change Branch and Bound
 
-The library has individual APIs for each algorithm. It also has a wrapper API `select_coin()` which performs selection via each algorithm and return the selection result with the least waste metric.
+The library has individual APIs for each algorithm. It also has a wrapper API `select_coin()` which runs every algorithm in parallel and returns the selection result with the least waste metric.
 
 Bitcoin specific example is given [here](./examples/bitcoin_crate/).
 

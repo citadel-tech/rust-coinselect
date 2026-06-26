@@ -1,68 +1,88 @@
 use crate::{
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric},
-    utils::{calculate_fee, calculate_waste, effective_value},
+    utils::{calculate_fee, calculate_fee_and_waste},
 };
 
 /// Performs coin selection using the Lowest Larger algorithm.
 ///
-/// Returns `NoSolutionFound` if no solution exists.
+/// Two candidate selections are considered and the one with the lower waste is returned:
+///
+/// 1. **Lowest larger** — the single smallest input that on its own covers the target plus fees.
+/// 2. **Accumulated smaller** — the inputs that are *not* individually sufficient, accumulated
+///    smallest-first until they cover the target plus fees.
+///
+/// Crucially, the smaller coins are compared *against* the smallest sufficient larger coin rather
+/// than being combined with it, so a single tidy larger coin can win over a pile of small ones.
+///
+/// Returns [`SelectionError::InsufficientFunds`] if neither candidate can cover the target.
 pub fn select_coin_lowestlarger(
     inputs: &[OutputGroup],
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
-    let mut accumulated_value: u64 = 0;
-    let mut accumulated_weight: u64 = 0;
-    let mut selected_inputs: Vec<usize> = Vec::new();
-    let mut estimated_fees: u64 = 0;
-    let base_fees = calculate_fee(options.base_weight, options.target_feerate).unwrap_or_default();
-    let target =
-        options.target_value + options.min_change_value + base_fees.max(options.min_absolute_fee);
+    // Accumulative path leaves a usable change output, so the target is padded by min_change_value.
+    let target = options.target_value + options.min_change_value;
+    let base_fee =
+        calculate_fee(options.base_weight, options.target_feerate)?.max(options.min_absolute_fee);
 
-    let mut sorted_inputs: Vec<_> = inputs.iter().enumerate().collect();
-    sorted_inputs.sort_by_key(|(_, input)| effective_value(input, options.target_feerate));
+    let mut sorted_inputs: Vec<(usize, &OutputGroup)> = inputs.iter().enumerate().collect();
+    sorted_inputs.sort_by_key(|(_, input)| input.value);
 
-    let index = sorted_inputs.partition_point(|(_, input)| {
-        input.value
-            <= (target + calculate_fee(input.weight, options.target_feerate).unwrap_or_default())
-    });
-
-    for (idx, input) in sorted_inputs.iter().take(index).rev() {
-        accumulated_value += input.value;
-        accumulated_weight += input.weight;
-        estimated_fees = calculate_fee(accumulated_weight, options.target_feerate)?;
-        selected_inputs.push(*idx);
-
-        if accumulated_value >= (target + estimated_fees) {
+    // Candidate 1: the smallest single input that alone covers target + its own fee.
+    let mut single_candidate: Option<SelectionOutput> = None;
+    for &(idx, input) in &sorted_inputs {
+        if input.value >= target + base_fee {
+            let (fee, waste) = calculate_fee_and_waste(options, input.value, input.weight)?;
+            single_candidate = Some(SelectionOutput {
+                selected_inputs: vec![input.index.unwrap_or(idx)],
+                waste: WasteMetric(waste),
+                fee,
+            });
             break;
         }
     }
 
-    if accumulated_value < (target + estimated_fees) {
-        for (idx, input) in sorted_inputs.iter().skip(index) {
-            accumulated_value += input.value;
-            accumulated_weight += input.weight;
-            estimated_fees = calculate_fee(accumulated_weight, options.target_feerate)?;
-            selected_inputs.push(*idx);
+    // Candidate 2: accumulate the inputs that are not individually sufficient, smallest first.
+    let mut accumulated_value: u64 = 0;
+    let mut accumulated_weight: u64 = 0;
+    let mut selected_inputs: Vec<usize> = Vec::new();
+    let mut accumulated_sufficient = false;
+    for &(idx, input) in &sorted_inputs {
+        if input.value >= target + base_fee {
+            // Individually sufficient inputs belong to the single-coin candidate, skip here.
+            continue;
+        }
+        accumulated_value += input.value;
+        accumulated_weight += input.weight;
+        selected_inputs.push(input.index.unwrap_or(idx));
 
-            if accumulated_value >= (target + estimated_fees.max(options.min_absolute_fee)) {
-                break;
-            }
+        if accumulated_value >= target + base_fee {
+            accumulated_sufficient = true;
+            break;
         }
     }
-
-    if accumulated_value < (target + estimated_fees) {
-        Err(SelectionError::InsufficientFunds)
-    } else {
-        let waste: f32 = calculate_waste(
-            options,
-            accumulated_value,
-            accumulated_weight,
-            estimated_fees,
-        );
-        Ok(SelectionOutput {
+    let accumulated_candidate = if accumulated_sufficient {
+        let (fee, waste) = calculate_fee_and_waste(options, accumulated_value, accumulated_weight)?;
+        Some(SelectionOutput {
             selected_inputs,
             waste: WasteMetric(waste),
+            fee,
         })
+    } else {
+        None
+    };
+
+    // Pick the candidate with the lower waste.
+    match (single_candidate, accumulated_candidate) {
+        (Some(single), Some(accumulated)) => {
+            if accumulated.waste <= single.waste {
+                Ok(accumulated)
+            } else {
+                Ok(single)
+            }
+        }
+        (Some(single), None) => Ok(single),
+        (None, Some(accumulated)) => Ok(accumulated),
+        (None, None) => Err(SelectionError::InsufficientFunds),
     }
 }
 
@@ -81,72 +101,84 @@ mod test {
                 weight: 100,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
             OutputGroup {
                 value: 1500,
                 weight: 200,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
             OutputGroup {
                 value: 3400,
                 weight: 300,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
             OutputGroup {
                 value: 2200,
                 weight: 150,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
             OutputGroup {
                 value: 1190,
                 weight: 200,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
             OutputGroup {
                 value: 3300,
                 weight: 100,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
             OutputGroup {
                 value: 1000,
                 weight: 190,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
             OutputGroup {
                 value: 2000,
                 weight: 210,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
             OutputGroup {
                 value: 3000,
                 weight: 300,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
             OutputGroup {
                 value: 2250,
                 weight: 250,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
             OutputGroup {
                 value: 190,
                 weight: 220,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
             OutputGroup {
                 value: 1750,
                 weight: 170,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
         ]
     }

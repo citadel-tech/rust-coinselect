@@ -20,6 +20,12 @@ pub struct OutputGroup {
     /// Set to `None` if FIFO selection is not required. Sequence numbers are arbitrary indices that denote the relative age of a UTXO group among a set of groups.
     /// To denote the oldest UTXO group, assign it a sequence number of `Some(0)`.
     pub creation_sequence: Option<u32>,
+    /// Original index of this group in the caller-provided input slice.
+    ///
+    /// `select_coin` sets this while building its effective-value working set. Direct algorithm
+    /// callers may leave it as `None`, in which case algorithms return indices into their input
+    /// slice.
+    pub index: Option<usize>,
 }
 
 /// Options required to compute fees and waste metric.
@@ -100,8 +106,8 @@ pub enum SelectionError {
 /// In high fee rate environments, selecting fewer inputs reduces transaction fees.
 /// In low fee rate environments, selecting more inputs reduces overall fees.
 /// It compares various selection algorithms to find the most optimized solution, represented by the lowest [WasteMetric] value.
-#[derive(Debug)]
-pub struct WasteMetric(pub f32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WasteMetric(pub i64);
 
 /// The result of selection algorithm.
 #[derive(Debug)]
@@ -110,6 +116,8 @@ pub struct SelectionOutput {
     pub selected_inputs: Vec<usize>,
     /// The waste amount, for the above inputs.
     pub waste: WasteMetric,
+    /// The transaction fee (in satoshis) for the above inputs.
+    pub fee: u64,
 }
 
 /// EffectiveValue type alias

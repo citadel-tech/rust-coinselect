@@ -1,11 +1,12 @@
 use crate::{
     types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric},
-    utils::{calculate_fee, calculate_waste},
+    utils::{calculate_fee, calculate_fee_and_waste},
 };
 
 /// Performs coin selection using the First-In-First-Out (FIFO) algorithm.
 ///
-/// Returns `NoSolutionFound` if no solution is found.
+/// Oldest UTXOs (by `creation_sequence`) are spent first; inputs without a sequence are appended
+/// last in their original order.
 pub fn select_coin_fifo(
     inputs: &[OutputGroup],
     options: &CoinSelectionOpt,
@@ -13,10 +14,9 @@ pub fn select_coin_fifo(
     let mut accumulated_value: u64 = 0;
     let mut accumulated_weight: u64 = 0;
     let mut selected_inputs: Vec<usize> = Vec::new();
-    let mut estimated_fees: u64 = 0;
-    let base_fees = calculate_fee(options.base_weight, options.target_feerate).unwrap_or_default();
-    let target =
-        options.target_value + options.min_change_value + base_fees.max(options.min_absolute_fee);
+    let target = options.target_value + options.min_change_value;
+    let base_fee =
+        calculate_fee(options.base_weight, options.target_feerate)?.max(options.min_absolute_fee);
 
     // Sorting the inputs vector based on creation_sequence
     let mut sorted_inputs: Vec<_> = inputs
@@ -35,28 +35,24 @@ pub fn select_coin_fifo(
 
     sorted_inputs.extend(inputs_without_sequence);
 
-    for (index, inputs) in sorted_inputs {
-        estimated_fees =
-            calculate_fee(accumulated_weight, options.target_feerate).unwrap_or_default();
-        if accumulated_value >= target + estimated_fees {
+    for (index, input) in sorted_inputs {
+        accumulated_value += input.value;
+        accumulated_weight += input.weight;
+        selected_inputs.push(input.index.unwrap_or(index));
+
+        if accumulated_value >= target + base_fee {
             break;
         }
-        accumulated_value += inputs.value;
-        accumulated_weight += inputs.weight;
-        selected_inputs.push(index);
     }
-    if accumulated_value < target + estimated_fees {
+
+    if accumulated_value < target + base_fee {
         Err(SelectionError::InsufficientFunds)
     } else {
-        let waste: f32 = calculate_waste(
-            options,
-            accumulated_value,
-            accumulated_weight,
-            estimated_fees,
-        );
+        let (fee, waste) = calculate_fee_and_waste(options, accumulated_value, accumulated_weight)?;
         Ok(SelectionOutput {
             selected_inputs,
             waste: WasteMetric(waste),
+            fee,
         })
     }
 }
@@ -76,18 +72,21 @@ mod test {
                 weight: 100,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
             OutputGroup {
                 value: 2000,
                 weight: 200,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
             OutputGroup {
                 value: 3000,
                 weight: 300,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
         ]
     }
@@ -98,24 +97,28 @@ mod test {
                 weight: 100,
                 input_count: 1,
                 creation_sequence: Some(1),
+                index: None,
             },
             OutputGroup {
                 value: 2000,
                 weight: 200,
                 input_count: 1,
                 creation_sequence: Some(5000),
+                index: None,
             },
             OutputGroup {
                 value: 3000,
                 weight: 300,
                 input_count: 1,
                 creation_sequence: Some(1001),
+                index: None,
             },
             OutputGroup {
                 value: 1500,
                 weight: 150,
                 input_count: 1,
                 creation_sequence: None,
+                index: None,
             },
         ]
     }

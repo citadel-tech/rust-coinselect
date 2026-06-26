@@ -12,7 +12,7 @@ use bitcoin::{
 use rust_coinselect::{
     selectcoin::select_coin,
     types::{CoinSelectionOpt, ExcessStrategy, OutputGroup},
-    utils::{calculate_base_weight_btc, calculate_fee},
+    utils::calculate_fee,
 };
 use std::str::FromStr;
 
@@ -121,7 +121,9 @@ fn main() {
         target_feerate: 15.0,
         long_term_feerate: Some(long_term_feerate),
         min_absolute_fee: 4000,
-        base_weight: calculate_base_weight_btc(target_weight + change_weight),
+        // Total default: (16 + 2 + 4 + 4 + 1 + 16 = 43 WU + variable) WU
+        // Source - https://docs.rs/bitcoin/latest/src/bitcoin/blockdata/transaction.rs.html#599-602
+        base_weight: target_weight + 43,
         change_weight,
         change_cost,
         avg_input_weight,

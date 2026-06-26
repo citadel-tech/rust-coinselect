@@ -11,18 +11,21 @@ fn benchmark_select_coin_fifo(c: &mut Criterion) {
             weight: 100,
             input_count: 1,
             creation_sequence: None,
+            index: None,
         },
         OutputGroup {
             value: 2000,
             weight: 200,
             input_count: 1,
             creation_sequence: None,
+            index: None,
         },
         OutputGroup {
             value: 3000,
             weight: 300,
             input_count: 1,
             creation_sequence: None,
+            index: None,
         },
     ];
 
