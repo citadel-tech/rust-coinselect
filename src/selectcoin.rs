@@ -104,7 +104,7 @@ mod test {
         },
         selectcoin::select_coin,
         types::{CoinSelectionOpt, ExcessStrategy, OutputGroup, SelectionError},
-        utils::calculate_fee_and_waste,
+        utils::calculate_fee,
     };
 
     fn setup_basic_output_groups() -> Vec<OutputGroup> {
@@ -219,8 +219,13 @@ mod test {
         selected: &[usize],
     ) {
         let value: u64 = selected.iter().map(|&i| inputs[i].value).sum();
-        let weight: u64 = selected.iter().map(|&i| inputs[i].weight).sum();
-        let (total_fee, _) = calculate_fee_and_waste(options, value, weight).unwrap();
+        let selected_weight: u64 = selected.iter().map(|&i| inputs[i].weight).sum();
+        let total_fee = calculate_fee(
+            options.base_weight + selected_weight,
+            options.target_feerate,
+        )
+        .unwrap()
+        .max(options.min_absolute_fee);
         assert!(
             value >= options.target_value + total_fee,
             "selection {:?} (value {}) does not cover target {} + fee {}",
