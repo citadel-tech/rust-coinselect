@@ -1,17 +1,16 @@
 use crate::{
-    types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric},
-    utils::{calculate_fee, calculate_fee_and_waste},
+    types::{
+        CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric, TOTAL_TRIES,
+    },
+    utils::{
+        calculate_fee, calculate_fee_and_waste, insufficient_funds, prepare_output_groups,
+        PreparedOutputGroup,
+    },
 };
-
-/// Upper bound on the number of branches explored, matching Bitcoin Core's `TOTAL_TRIES`.
-/// This guarantees the search terminates in bounded time regardless of the input set size.
-const TOTAL_TRIES: u32 = 100_000;
 
 /// Performs coin selection via the Branch and Bound algorithm.
 ///
-/// This is a port of Bitcoin Core's `SelectCoinsBnB` after the "Optimize BnB exploration" rewrite
-/// (bitcoin/bitcoin#32150), which adopts the CoinGrinder-style traversal: instead of explicitly
-/// backtracking and re-testing omission branches, the search tracks the next candidate to explore
+/// Update from Bitcoin Core's BNB: Instead of explicitly backtracking and re-testing omission branches, the search tracks the next candidate to explore
 /// and *shifts* directly to it, and it uses a precomputed `lookahead` of the remaining effective
 /// value at each depth to prune dead branches early. Successive candidates with identical effective
 /// value to a just-omitted one are skipped, since they would only re-derive an already-seen set.
@@ -19,7 +18,7 @@ const TOTAL_TRIES: u32 = 100_000;
 /// The search looks for a combination whose summed effective value lands in the window
 /// `[target, target + cost_of_change]`. Because it searches for a *changeless* solution (the
 /// leftover is small enough to drop to fees rather than create a change output), the target here is
-/// deliberately *not* padded by `min_change_value` — unlike the accumulative algorithms. Effective
+/// deliberately *not* padded by `min_change_value` : unlike the accumulative algorithms. Effective
 /// values are used throughout, so an input's spend fee is accounted for exactly once. Among all
 /// solutions in range, the one with the least waste is returned.
 ///
@@ -29,35 +28,27 @@ pub fn select_coin_bnb(
     inputs: &[OutputGroup],
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
+    let insufficient_funds_error = insufficient_funds(inputs, options);
+    let mut inputs = prepare_output_groups(inputs, options)?;
     let base_fee =
-        calculate_fee(options.base_weight, options.target_feerate)?.max(options.min_absolute_fee);
+        calculate_fee(options.base_weight, options.target_feerate).max(options.min_absolute_fee);
     let actual_target = options.target_value + base_fee;
     let cost_of_change = options.change_cost;
 
-    // The wrapper already mutates input values to effective values and filters dust-like inputs.
-    let mut pool = inputs.to_vec();
-    for (index, input) in pool.iter_mut().enumerate() {
-        input.index.get_or_insert(index);
-    }
-
-    if pool.is_empty() {
-        return Err(SelectionError::InsufficientFunds);
-    }
-
     // Sort by descending effective value (largest first exploration).
-    pool.sort_by(|a, b| b.value.cmp(&a.value));
+    inputs.sort_by(|a, b| b.value.cmp(&a.value));
 
-    // `lookahead[i]` is the total effective value of all candidates *after* index `i` — i.e. the
+    // `lookahead[i]` is the total effective value of all candidates *after* index `i` : i.e. the
     // value still reachable from depth `i`. Used to cut branches that can no longer hit the target.
-    let mut lookahead = vec![0u64; pool.len()];
+    let mut lookahead = vec![0u64; inputs.len()];
     let mut total_available: u64 = 0;
-    for index in (0..pool.len()).rev() {
+    for index in (0..inputs.len()).rev() {
         lookahead[index] = total_available;
-        total_available += pool[index].value;
+        total_available += inputs[index].value;
     }
 
     if total_available < actual_target {
-        return Err(SelectionError::InsufficientFunds);
+        return Err(insufficient_funds_error);
     }
 
     // At high feerates, including more inputs only increases waste, which enables an extra pruning
@@ -66,7 +57,7 @@ pub fn select_coin_bnb(
         .long_term_feerate
         .is_some_and(|long_term_feerate| options.target_feerate > long_term_feerate);
 
-    let mut current_selection: Vec<usize> = Vec::with_capacity(pool.len());
+    let mut current_selection: Vec<usize> = Vec::with_capacity(inputs.len());
     let mut current_amount: u64 = 0;
     let mut current_waste: i64 = 0;
 
@@ -79,13 +70,13 @@ pub fn select_coin_bnb(
 
     while !is_done {
         // EXPLORE: add `next_utxo` to the current selection.
-        let candidate = &pool[next_utxo];
+        let candidate = &inputs[next_utxo];
         current_amount += candidate.value;
-        current_waste += calculate_fee(candidate.weight, options.target_feerate)? as i64
+        current_waste += calculate_fee(candidate.weight, options.target_feerate) as i64
             - calculate_fee(
                 candidate.weight,
                 options.long_term_feerate.unwrap_or(options.target_feerate),
-            )? as i64;
+            ) as i64;
         current_selection.push(next_utxo);
         next_utxo += 1;
 
@@ -123,7 +114,7 @@ pub fn select_coin_bnb(
         // A CUT is a SHIFT preceded by also dropping the last candidate (it leads nowhere).
         if should_cut {
             deselect_last(
-                &pool,
+                &inputs,
                 options,
                 &mut current_selection,
                 &mut current_amount,
@@ -142,7 +133,7 @@ pub fn select_coin_bnb(
             // drop that last selected candidate from the running totals.
             next_utxo = current_selection.last().unwrap() + 1;
             deselect_last(
-                &pool,
+                &inputs,
                 options,
                 &mut current_selection,
                 &mut current_amount,
@@ -152,13 +143,13 @@ pub fn select_coin_bnb(
 
             // Skip candidates identical in effective value to the just-omitted one (clones): trying
             // them would only re-derive a set whose waste we have already considered. If we run off
-            // the end of the pool, there is no fresh branch here, so SHIFT again (backtrack further).
+            // the end of the inputs, there is no fresh branch here, so SHIFT again (backtrack further).
             loop {
-                if next_utxo >= pool.len() {
+                if next_utxo >= inputs.len() {
                     should_shift = true;
                     break;
                 }
-                if pool[next_utxo - 1].value == pool[next_utxo].value {
+                if inputs[next_utxo - 1].value == inputs[next_utxo].value {
                     next_utxo += 1;
                     continue;
                 }
@@ -174,25 +165,29 @@ pub fn select_coin_bnb(
 
     let selected_inputs: Vec<usize> = selected_pool_indices
         .iter()
-        .map(|&i| pool[i].index.expect("pool index is set before sorting"))
+        .map(|&i| inputs[i].index)
         .collect();
 
     // Recompute the reported waste from the concrete selection using the shared waste function so
     // the metric is comparable with the other algorithms.
-    let accumulated_value: u64 = selected_pool_indices.iter().map(|&i| pool[i].value).sum();
-    let accumulated_weight: u64 = selected_pool_indices.iter().map(|&i| pool[i].weight).sum();
+    let accumulated_value: u64 = selected_pool_indices.iter().map(|&i| inputs[i].value).sum();
+    let accumulated_weight: u64 = selected_pool_indices
+        .iter()
+        .map(|&i| inputs[i].weight)
+        .sum();
     let (fee, waste) = calculate_fee_and_waste(options, accumulated_value, accumulated_weight)?;
+    let fee_bnb = fee.saturating_sub(calculate_fee(options.change_weight, options.target_feerate));
 
     Ok(SelectionOutput {
         selected_inputs,
         waste: WasteMetric(waste),
-        fee,
+        fee: fee_bnb,
     })
 }
 
 /// Removes the most recently selected candidate, undoing its contribution to the running totals.
 fn deselect_last(
-    pool: &[OutputGroup],
+    inputs: &[PreparedOutputGroup],
     options: &CoinSelectionOpt,
     current_selection: &mut Vec<usize>,
     current_amount: &mut u64,
@@ -201,13 +196,13 @@ fn deselect_last(
     let last = current_selection
         .pop()
         .expect("deselect_last on empty selection");
-    let candidate = &pool[last];
+    let candidate = &inputs[last];
     *current_amount -= candidate.value;
-    *current_waste -= calculate_fee(candidate.weight, options.target_feerate)? as i64
+    *current_waste -= calculate_fee(candidate.weight, options.target_feerate) as i64
         - calculate_fee(
             candidate.weight,
             options.long_term_feerate.unwrap_or(options.target_feerate),
-        )? as i64;
+        ) as i64;
     Ok(())
 }
 
@@ -215,7 +210,9 @@ fn deselect_last(
 mod test {
     use crate::{
         algorithms::bnb::select_coin_bnb,
-        types::{CoinSelectionOpt, ExcessStrategy, OutputGroup, SelectionError},
+        types::{
+            basic_output_group, CoinSelectionOpt, ExcessStrategy, OutputGroup, SelectionError,
+        },
     };
 
     /// Inputs whose effective values (weight 0 => fee 0 at feerate 1.0) are exactly their values,
@@ -223,13 +220,7 @@ mod test {
     fn setup_output_groups() -> Vec<OutputGroup> {
         [80_000u64, 40_000, 20_000, 10_000, 5_000]
             .into_iter()
-            .map(|value| OutputGroup {
-                value,
-                weight: 0,
-                input_count: 1,
-                creation_sequence: None,
-                index: None,
-            })
+            .map(|value| basic_output_group(value, 0))
             .collect()
     }
 
@@ -242,8 +233,6 @@ mod test {
             base_weight: 0,
             change_weight: 50,
             change_cost: 20,
-            avg_input_weight: 20,
-            avg_output_weight: 10,
             min_change_value: 500,
             excess_strategy: ExcessStrategy::ToChange,
         }
@@ -281,7 +270,10 @@ mod test {
         let total: u64 = inputs.iter().map(|i| i.value).sum();
         let options = setup_options(total + 1_000);
         let result = select_coin_bnb(&inputs, &options);
-        assert!(matches!(result, Err(SelectionError::InsufficientFunds)));
+        assert!(matches!(
+            result,
+            Err(SelectionError::InsufficientFunds { .. })
+        ));
     }
 
     #[test]
@@ -299,13 +291,7 @@ mod test {
     fn test_bnb_handles_clones() {
         let inputs: Vec<OutputGroup> = [10_000u64, 10_000, 10_000, 10_000, 7_000]
             .into_iter()
-            .map(|value| OutputGroup {
-                value,
-                weight: 0,
-                input_count: 1,
-                creation_sequence: None,
-                index: None,
-            })
+            .map(|value| basic_output_group(value, 0))
             .collect();
         let options = setup_options(30_000); // 10000 * 3
         let result = select_coin_bnb(&inputs, &options).expect("a solution should exist");
@@ -335,18 +321,13 @@ mod test {
         for values in value_sets {
             let inputs: Vec<OutputGroup> = values
                 .iter()
-                .map(|&value| OutputGroup {
-                    value,
-                    weight: 0,
-                    input_count: 1,
-                    creation_sequence: None,
-                    index: None,
-                })
+                .map(|&value| basic_output_group(value, 0))
                 .collect();
 
             for target in 1u64..=120 {
                 let mut options = setup_options(target);
                 options.change_cost = 5; // cost_of_change window width
+                options.min_change_value = 0;
 
                 // Brute force: minimum excess over all subsets summing into the window.
                 let n = inputs.len();
@@ -386,7 +367,7 @@ mod test {
                             "target {target}, values {values:?}: BnB found nothing but brute force did"
                         );
                     }
-                    Err(SelectionError::InsufficientFunds) => {
+                    Err(SelectionError::InsufficientFunds { .. }) => {
                         let total: u64 = values.iter().sum();
                         assert!(
                             total < target,

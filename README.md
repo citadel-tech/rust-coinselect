@@ -8,10 +8,10 @@ The library performs coin selection via various algorithms through a well-docume
 
 The following algorithms are implemented from scratch in Rust:
 
-- Branch and Bound (a port of Bitcoin Core's `SelectCoinsBnB`)
+- Branch and Bound
 - Lowest Larger
 - First-In-First-Out
-- Least-Change Branch and Bound
+- Coingrinder
 
 The library has individual APIs for each algorithm. It also has a wrapper API `select_coin()` which runs every algorithm in parallel and returns the selection result with the least waste metric.
 
@@ -42,8 +42,6 @@ let options = CoinSelectionOpt {
     base_weight: 72u64,
     change_weight: 18u64,
     change_cost: 250u64,
-    avg_input_weight: 300u64,
-    avg_output_weight: 250u64,
     min_change_value: 1_000u64,
     excess_strategy: ExcessStrategy::ToChange,
 };

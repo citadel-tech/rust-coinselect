@@ -1,5 +1,89 @@
-use crate::types::{CoinSelectionOpt, EffectiveValue, ExcessStrategy, SelectionError, Weight};
-use std::{collections::HashSet, fmt};
+use crate::types::{
+    CoinSelectionOpt, EffectiveValue, ExcessStrategy, OutputGroup, SelectionError, Weight,
+};
+use std::{collections::HashSet, fmt, ops::Deref};
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedOutputGroup {
+    output_group: OutputGroup,
+    pub index: usize,
+}
+
+impl Deref for PreparedOutputGroup {
+    type Target = OutputGroup;
+
+    fn deref(&self) -> &Self::Target {
+        &self.output_group
+    }
+}
+
+/// Builds the internal effective-value working set used by every selection algorithm.
+pub(crate) fn prepare_output_groups(
+    inputs: &[OutputGroup],
+    options: &CoinSelectionOpt,
+) -> Result<Vec<PreparedOutputGroup>> {
+    if options.target_value == 0 {
+        return Err(SelectionError::NonPositiveTarget);
+    }
+    if options.target_feerate <= 0.0
+        || options
+            .long_term_feerate
+            .is_some_and(|feerate| feerate <= 0.0)
+    {
+        return Err(SelectionError::NonPositiveFeeRate);
+    }
+    if options.target_feerate > 1000.0
+        || options
+            .long_term_feerate
+            .is_some_and(|feerate| feerate > 1000.0)
+    {
+        return Err(SelectionError::AbnormallyHighFeeRate);
+    }
+
+    let mut prepared = Vec::with_capacity(inputs.len());
+    for (index, input) in inputs.iter().enumerate() {
+        let effective_value = input
+            .value
+            .saturating_sub(calculate_fee(input.weight, options.target_feerate));
+        if effective_value >= options.min_change_value {
+            let mut output_group = input.clone();
+            output_group.value = effective_value;
+            prepared.push(PreparedOutputGroup {
+                output_group,
+                index,
+            });
+        }
+    }
+    if prepared.is_empty() {
+        return Err(insufficient_funds(inputs, options));
+    }
+    Ok(prepared)
+}
+
+/// Reports the raw available value and the amount required when spending every supplied input.
+pub(crate) fn insufficient_funds(
+    inputs: &[OutputGroup],
+    options: &CoinSelectionOpt,
+) -> SelectionError {
+    let available = inputs
+        .iter()
+        .fold(0u64, |total, input| total.saturating_add(input.value));
+    let base_fee =
+        calculate_fee(options.base_weight, options.target_feerate).max(options.min_absolute_fee);
+    let total_input_fee = inputs
+        .iter()
+        .map(|input| calculate_fee(input.weight, options.target_feerate))
+        .sum::<u64>();
+    let required = options
+        .target_value
+        .saturating_add(base_fee)
+        .saturating_add(total_input_fee);
+
+    SelectionError::InsufficientFunds {
+        available,
+        required,
+    }
+}
 
 /// Computes the total fee and waste metric (in satoshis) for a selection.
 ///
@@ -7,16 +91,19 @@ use std::{collections::HashSet, fmt};
 #[inline]
 pub fn calculate_fee_and_waste(
     options: &CoinSelectionOpt,
-    accumulated_value_with_fee: u64,
+    accumulated_effective_value: u64,
     accumulated_weight: u64,
 ) -> Result<(u64, i64)> {
-    let base_fee =
-        calculate_fee(options.base_weight, options.target_feerate)?.max(options.min_absolute_fee);
-    let input_fee = calculate_fee(accumulated_weight, options.target_feerate)?;
+    let base_fee = calculate_fee(
+        options.base_weight + options.change_weight,
+        options.target_feerate,
+    )
+    .max(options.min_absolute_fee);
+    let input_fee = calculate_fee(accumulated_weight, options.target_feerate);
     let long_term_feerate = options.long_term_feerate.unwrap_or(options.target_feerate);
     let fee_difference = (options.target_feerate - long_term_feerate) as f64;
     let mut waste = (accumulated_weight as f64 * fee_difference).round() as i64;
-    let excess = accumulated_value_with_fee.saturating_sub(options.target_value + base_fee);
+    let excess = accumulated_effective_value.saturating_sub(options.target_value + base_fee);
     if options.excess_strategy == ExcessStrategy::ToChange && excess >= options.min_change_value {
         // A change output is actually created, so we pay its cost (now and when spent later).
         waste += options.change_cost as i64;
@@ -50,7 +137,13 @@ impl fmt::Display for SelectionError {
             SelectionError::NonPositiveFeeRate => write!(f, "Negative fee rate"),
             SelectionError::NonPositiveTarget => write!(f, "Target value must be positive"),
             SelectionError::AbnormallyHighFeeRate => write!(f, "Abnormally high fee rate"),
-            SelectionError::InsufficientFunds => write!(f, "The Inputs funds are insufficient"),
+            SelectionError::InsufficientFunds {
+                available,
+                required,
+            } => write!(
+                f,
+                "Insufficient funds: available {available} sats, required {required} sats"
+            ),
             SelectionError::NoSolutionFound => write!(f, "No solution could be derived"),
         }
     }
@@ -61,20 +154,14 @@ impl std::error::Error for SelectionError {}
 type Result<T> = std::result::Result<T, SelectionError>;
 
 #[inline]
-pub fn calculate_fee(weight: u64, rate: f32) -> Result<u64> {
-    if rate <= 0.0 {
-        Err(SelectionError::NonPositiveFeeRate)
-    } else if rate > 1000.0 {
-        Err(SelectionError::AbnormallyHighFeeRate)
-    } else {
-        Ok((weight as f32 * rate).ceil() as u64)
-    }
+pub fn calculate_fee(weight: u64, rate: f32) -> u64 {
+    (weight as f32 * rate).ceil() as u64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CoinSelectionOpt, ExcessStrategy, SelectionError};
+    use crate::types::{CoinSelectionOpt, ExcessStrategy};
 
     fn setup_options(target_value: u64) -> CoinSelectionOpt {
         CoinSelectionOpt {
@@ -85,71 +172,11 @@ mod tests {
             base_weight: 10,
             change_weight: 50,
             change_cost: 10,
-            avg_input_weight: 20,
-            avg_output_weight: 10,
             min_change_value: 500,
             excess_strategy: ExcessStrategy::ToChange,
         }
     }
 
-    /// Tests the fee calculation function with various input scenarios.
-    /// Fee calculation is critical for coin selection as it determines the effective value
-    /// of each UTXO after accounting for the cost to spend it.
-    ///
-    /// Test vectors cover:
-    /// - Normal fee calculation with positive rate
-    /// - Error case with negative fee rate
-    /// - Error case with abnormally high fee rate (>1000 sat/vB)
-    /// - Edge case with zero fee rate
-    #[test]
-    fn test_calculate_fee() {
-        struct TestVector {
-            weight: u64,
-            fee: f32,
-            output: Result<u64>,
-        }
-
-        let test_vectors = [
-            TestVector {
-                weight: 60,
-                fee: 5.0,
-                output: Ok(300),
-            },
-            TestVector {
-                weight: 60,
-                fee: -5.0,
-                output: Err(SelectionError::NonPositiveFeeRate),
-            },
-            TestVector {
-                weight: 60,
-                fee: 1001.0,
-                output: Err(SelectionError::AbnormallyHighFeeRate),
-            },
-            TestVector {
-                weight: 60,
-                fee: 0.0,
-                output: Err(SelectionError::NonPositiveFeeRate),
-            },
-        ];
-
-        for vector in test_vectors {
-            let result = calculate_fee(vector.weight, vector.fee);
-            match result {
-                Ok(val) => {
-                    assert_eq!(val, vector.output.unwrap())
-                }
-                Err(err) => {
-                    let output = vector.output.err();
-                    assert_eq!(err, output.unwrap());
-                }
-            }
-        }
-    }
-
-    /// Tests the waste metric calculation which helps optimize coin selection.
-    /// Waste represents the cost of creating a change output plus any excess amount
-    /// that goes to fees or is added to recipient outputs.
-    ///
     /// The waste metric considers:
     /// - Long-term vs current fee rates
     /// - Cost of creating change outputs

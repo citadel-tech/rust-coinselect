@@ -1,18 +1,12 @@
 use crate::{
-    types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric},
-    utils::{calculate_fee, calculate_fee_and_waste},
+    types::{
+        CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput, WasteMetric, TOTAL_TRIES,
+    },
+    utils::{
+        calculate_fee, calculate_fee_and_waste, insufficient_funds, prepare_output_groups,
+        PreparedOutputGroup,
+    },
 };
-
-/// Upper bound on explored nodes, matching the bounded-search policy used by BnB.
-const TOTAL_TRIES: u32 = 100_000;
-
-#[derive(Debug, Clone, Copy)]
-struct Candidate {
-    index: usize,
-    value: u64,
-    weight: u64,
-    input_count: usize,
-}
 
 #[derive(Debug, Clone)]
 struct BestSelection {
@@ -39,47 +33,39 @@ impl BestSelection {
 /// Deterministic change-producing fallback issuing the least total weight to minimize the fee.
 ///
 /// BnB is the changeless path. CoinGrinder is the fallback for when change is expected: it searches
-/// for a selection that covers the target, total fee, and a minimally useful change amount, then
-/// minimizes selected input weight. This avoids the old least-change behavior where many tiny inputs
-/// could be linked together merely to shave the change amount down by a few sats.
+/// for a selection that covers the target and total fee, then minimizes selected input weight. This
+/// avoids the old least-change behavior where many tiny inputs could be linked together merely to
+/// shave the change amount down by a few sats.
 pub fn select_coin_coingrinder(
     inputs: &[OutputGroup],
     options: &CoinSelectionOpt,
 ) -> Result<SelectionOutput, SelectionError> {
-    let mut candidates = Vec::with_capacity(inputs.len());
-    for (index, input) in inputs.iter().enumerate() {
-        candidates.push(Candidate {
-            index: input.index.unwrap_or(index),
-            value: input.value,
-            weight: input.weight,
-            input_count: input.input_count,
-        });
-    }
+    let insufficient_funds_error = insufficient_funds(inputs, options);
+    let mut inputs = prepare_output_groups(inputs, options)?;
 
-    if candidates.is_empty() {
-        return Err(SelectionError::InsufficientFunds);
-    }
-
-    candidates.sort_by(|a, b| {
+    inputs.sort_by(|a, b| {
         b.value
             .cmp(&a.value)
             .then_with(|| a.weight.cmp(&b.weight))
             .then_with(|| a.index.cmp(&b.index))
     });
 
-    let mut remaining_value = vec![0u64; candidates.len() + 1];
-    for index in (0..candidates.len()).rev() {
-        remaining_value[index] = remaining_value[index + 1] + candidates[index].value;
+    let mut remaining_value = vec![0u64; inputs.len() + 1];
+    for index in (0..inputs.len()).rev() {
+        remaining_value[index] = remaining_value[index + 1] + inputs[index].value;
     }
 
     let mut best = None;
     let mut selected = Vec::new();
     let mut tries = TOTAL_TRIES;
-    let base_fee =
-        calculate_fee(options.base_weight, options.target_feerate)?.max(options.min_absolute_fee);
+    let base_fee = calculate_fee(
+        options.base_weight + options.change_weight,
+        options.target_feerate,
+    )
+    .max(options.min_absolute_fee);
 
     search(
-        &candidates,
+        &inputs,
         &remaining_value,
         0,
         0,
@@ -92,7 +78,7 @@ pub fn select_coin_coingrinder(
         &mut tries,
     )?;
 
-    let best = best.ok_or(SelectionError::InsufficientFunds)?;
+    let best = best.ok_or(insufficient_funds_error)?;
     let (fee, waste) = calculate_fee_and_waste(options, best.value, best.weight)?;
 
     Ok(SelectionOutput {
@@ -104,7 +90,7 @@ pub fn select_coin_coingrinder(
 
 #[allow(clippy::too_many_arguments)]
 fn search(
-    candidates: &[Candidate],
+    inputs: &[PreparedOutputGroup],
     remaining_value: &[u64],
     index: usize,
     value: u64,
@@ -116,10 +102,10 @@ fn search(
     best: &mut Option<BestSelection>,
     tries: &mut u32,
 ) -> Result<(), SelectionError> {
-    if *tries == 0 || index >= candidates.len() {
+    if *tries == 0 || index >= inputs.len() {
         return Ok(());
     }
-    if value + remaining_value[index] < options.target_value + options.min_change_value {
+    if value + remaining_value[index] < options.target_value + base_fee {
         return Ok(());
     }
     if best.as_ref().is_some_and(|best| weight > best.weight) {
@@ -128,13 +114,13 @@ fn search(
 
     *tries -= 1;
 
-    let candidate = candidates[index];
+    let candidate = &inputs[index];
     let new_value = value + candidate.value;
     let new_weight = weight + candidate.weight;
     let new_input_count = input_count + candidate.input_count;
     selected.push(candidate.index);
 
-    let required_value = options.target_value + options.min_change_value + base_fee;
+    let required_value = options.target_value + base_fee;
     if new_value >= required_value {
         let candidate_best = BestSelection {
             selected: selected.clone(),
@@ -150,7 +136,7 @@ fn search(
         }
     } else {
         search(
-            candidates,
+            inputs,
             remaining_value,
             index + 1,
             new_value,
@@ -166,7 +152,7 @@ fn search(
     selected.pop();
 
     search(
-        candidates,
+        inputs,
         remaining_value,
         index + 1,
         value,
@@ -184,7 +170,7 @@ fn search(
 mod test {
     use crate::{
         algorithms::coingrinder::select_coin_coingrinder,
-        types::{CoinSelectionOpt, ExcessStrategy, OutputGroup, SelectionError},
+        types::{basic_output_group, CoinSelectionOpt, ExcessStrategy, SelectionError},
     };
 
     fn setup_options(target_value: u64) -> CoinSelectionOpt {
@@ -196,8 +182,6 @@ mod test {
             base_weight: 0,
             change_weight: 50,
             change_cost: 20,
-            avg_input_weight: 20,
-            avg_output_weight: 10,
             min_change_value: 100,
             excess_strategy: ExcessStrategy::ToChange,
         }
@@ -206,34 +190,10 @@ mod test {
     #[test]
     fn test_coingrinder_prefers_lower_weight_over_lower_change() {
         let inputs = vec![
-            OutputGroup {
-                value: 10_500,
-                weight: 100,
-                input_count: 1,
-                creation_sequence: None,
-                index: None,
-            },
-            OutputGroup {
-                value: 4_000,
-                weight: 80,
-                input_count: 1,
-                creation_sequence: None,
-                index: None,
-            },
-            OutputGroup {
-                value: 3_500,
-                weight: 80,
-                input_count: 1,
-                creation_sequence: None,
-                index: None,
-            },
-            OutputGroup {
-                value: 3_000,
-                weight: 80,
-                input_count: 1,
-                creation_sequence: None,
-                index: None,
-            },
+            basic_output_group(10_500, 100),
+            basic_output_group(4_000, 80),
+            basic_output_group(3_500, 80),
+            basic_output_group(3_000, 80),
         ];
 
         let result = select_coin_coingrinder(&inputs, &setup_options(10_000)).unwrap();
@@ -243,27 +203,9 @@ mod test {
     #[test]
     fn test_coingrinder_uses_multiple_inputs_when_needed() {
         let inputs = vec![
-            OutputGroup {
-                value: 6_000,
-                weight: 90,
-                input_count: 1,
-                creation_sequence: None,
-                index: None,
-            },
-            OutputGroup {
-                value: 5_000,
-                weight: 90,
-                input_count: 1,
-                creation_sequence: None,
-                index: None,
-            },
-            OutputGroup {
-                value: 2_000,
-                weight: 50,
-                input_count: 1,
-                creation_sequence: None,
-                index: None,
-            },
+            basic_output_group(6_000, 90),
+            basic_output_group(5_000, 90),
+            basic_output_group(2_000, 50),
         ];
 
         let result = select_coin_coingrinder(&inputs, &setup_options(10_000)).unwrap();
@@ -274,15 +216,12 @@ mod test {
 
     #[test]
     fn test_coingrinder_insufficient_funds() {
-        let inputs = vec![OutputGroup {
-            value: 1_000,
-            weight: 100,
-            input_count: 1,
-            creation_sequence: None,
-            index: None,
-        }];
+        let inputs = vec![basic_output_group(1_000, 100)];
 
         let result = select_coin_coingrinder(&inputs, &setup_options(10_000));
-        assert!(matches!(result, Err(SelectionError::InsufficientFunds)));
+        assert!(matches!(
+            result,
+            Err(SelectionError::InsufficientFunds { .. })
+        ));
     }
 }

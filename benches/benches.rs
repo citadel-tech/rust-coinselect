@@ -1,7 +1,10 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rust_coinselect::{
     selectcoin::select_coin,
-    types::{CoinSelectionOpt, ExcessStrategy, OutputGroup, SelectionError, SelectionOutput},
+    types::{
+        CoinSelectionOpt, ExcessStrategy, OutputGroup, SelectionAlgorithm, SelectionError,
+        SelectionOutput,
+    },
 };
 
 fn benchmark_select_coin(c: &mut Criterion) {
@@ -11,56 +14,48 @@ fn benchmark_select_coin(c: &mut Criterion) {
             weight: 500,
             input_count: 1,
             creation_sequence: None,
-            index: None,
         },
         OutputGroup {
             value: 400,
             weight: 200,
             input_count: 1,
             creation_sequence: None,
-            index: None,
         },
         OutputGroup {
             value: 40000,
             weight: 300,
             input_count: 1,
             creation_sequence: None,
-            index: None,
         },
         OutputGroup {
             value: 25000,
             weight: 100,
             input_count: 1,
             creation_sequence: None,
-            index: None,
         },
         OutputGroup {
             value: 35000,
             weight: 150,
             input_count: 1,
             creation_sequence: None,
-            index: None,
         },
         OutputGroup {
             value: 600,
             weight: 250,
             input_count: 1,
             creation_sequence: None,
-            index: None,
         },
         OutputGroup {
             value: 30000,
             weight: 120,
             input_count: 1,
             creation_sequence: None,
-            index: None,
         },
         OutputGroup {
             value: 5000,
             weight: 50,
             input_count: 1,
             creation_sequence: None,
-            index: None,
         },
     ];
 
@@ -72,13 +67,13 @@ fn benchmark_select_coin(c: &mut Criterion) {
         base_weight: 10,
         change_weight: 50,
         change_cost: 10,
-        avg_input_weight: 20,
-        avg_output_weight: 10,
         min_change_value: 500,
         excess_strategy: ExcessStrategy::ToChange,
     };
 
-    let mut final_result: Option<Result<SelectionOutput, SelectionError>> = None;
+    let mut final_result: Option<
+        Result<Vec<(SelectionAlgorithm, SelectionOutput)>, SelectionError>,
+    > = None;
 
     c.bench_function("select_coin", |b| {
         b.iter(|| {
@@ -89,7 +84,7 @@ fn benchmark_select_coin(c: &mut Criterion) {
 
     if let Some(result) = &final_result {
         match result {
-            Ok(selection) => println!("SelectionOutput: {:?}", selection),
+            Ok(ranked) => println!("Ranked selections: {:?}", ranked),
             Err(e) => println!("Error: {:?}", e),
         }
     }

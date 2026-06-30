@@ -20,12 +20,16 @@ pub struct OutputGroup {
     /// Set to `None` if FIFO selection is not required. Sequence numbers are arbitrary indices that denote the relative age of a UTXO group among a set of groups.
     /// To denote the oldest UTXO group, assign it a sequence number of `Some(0)`.
     pub creation_sequence: Option<u32>,
-    /// Original index of this group in the caller-provided input slice.
-    ///
-    /// `select_coin` sets this while building its effective-value working set. Direct algorithm
-    /// callers may leave it as `None`, in which case algorithms return indices into their input
-    /// slice.
-    pub index: Option<usize>,
+}
+
+#[cfg(test)]
+pub(crate) fn basic_output_group(value: u64, weight: u64) -> OutputGroup {
+    OutputGroup {
+        value,
+        weight,
+        input_count: 1,
+        creation_sequence: None,
+    }
 }
 
 /// Options required to compute fees and waste metric.
@@ -59,12 +63,6 @@ pub struct CoinSelectionOpt {
     /// This includes the transaction fees for both the current transaction (where the change is created) and the future transaction (where the change is spent)
     pub change_cost: u64,
 
-    /// Estimate of average weight of an input.
-    pub avg_input_weight: u64,
-
-    /// Estimate of average weight of an output.
-    pub avg_output_weight: u64,
-
     /// The smallest amount of change that is considered acceptable in a transaction given the dust limit
     pub min_change_value: u64,
 
@@ -93,7 +91,11 @@ pub enum ExcessStrategy {
 /// Error Describing failure of a selection attempt, on any subset of inputs.
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Clone, Copy)]
 pub enum SelectionError {
-    InsufficientFunds,
+    /// The available UTXOs cannot cover the target and fees for spending the supplied inputs.
+    InsufficientFunds {
+        available: u64,
+        required: u64,
+    },
     NoSolutionFound,
     NonPositiveTarget,
     NonPositiveFeeRate,
@@ -108,6 +110,15 @@ pub enum SelectionError {
 /// It compares various selection algorithms to find the most optimized solution, represented by the lowest [WasteMetric] value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct WasteMetric(pub i64);
+
+/// Identifies which selection algorithm produced a given [`SelectionOutput`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SelectionAlgorithm {
+    BranchAndBound,
+    CoinGrinder,
+    Fifo,
+    LowestLarger,
+}
 
 /// The result of selection algorithm.
 #[derive(Debug)]
@@ -125,3 +136,6 @@ pub type EffectiveValue = u64;
 
 /// Weight type alias
 pub type Weight = u64;
+
+/// Upper bound on explored nodes,the bounded-search policy used by BnB and Coingrinder.
+pub const TOTAL_TRIES: u32 = 100_000;
