@@ -1,10 +1,10 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rust_coinselect::{
-    algorithms::leastchange::select_coin_bnb_leastchange,
+    algorithms::coingrinder::select_coin_coingrinder,
     types::{CoinSelectionOpt, ExcessStrategy, OutputGroup, SelectionError, SelectionOutput},
 };
 
-fn benchmark_select_coin_leastchange(c: &mut Criterion) {
+fn benchmark_select_coin_coingrinder(c: &mut Criterion) {
     let inputs = [
         OutputGroup {
             value: 55000,
@@ -64,17 +64,15 @@ fn benchmark_select_coin_leastchange(c: &mut Criterion) {
         base_weight: 10,
         change_weight: 50,
         change_cost: 10,
-        avg_input_weight: 20,
-        avg_output_weight: 10,
         min_change_value: 500,
         excess_strategy: ExcessStrategy::ToChange,
     };
 
     let mut final_result: Option<Result<SelectionOutput, SelectionError>> = None;
 
-    c.bench_function("select_coin_leastchange", |b| {
+    c.bench_function("select_coin_coingrinder", |b| {
         b.iter(|| {
-            final_result = Some(select_coin_bnb_leastchange(
+            final_result = Some(select_coin_coingrinder(
                 black_box(&inputs),
                 black_box(&options),
             ));
@@ -82,7 +80,6 @@ fn benchmark_select_coin_leastchange(c: &mut Criterion) {
         })
     });
 
-    // Print result after benchmarking finishes
     if let Some(result) = &final_result {
         match result {
             Ok(selection) => println!("SelectionOutput: {:?}", selection),
@@ -91,5 +88,5 @@ fn benchmark_select_coin_leastchange(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, benchmark_select_coin_leastchange);
+criterion_group!(benches, benchmark_select_coin_coingrinder);
 criterion_main!(benches);

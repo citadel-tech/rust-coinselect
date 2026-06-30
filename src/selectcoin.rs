@@ -1,160 +1,121 @@
+use std::thread;
+
 use crate::{
     algorithms::{
-        bnb::select_coin_bnb,
-        fifo::select_coin_fifo,
-        knapsack::select_coin_knapsack,
-        leastchange::select_coin_bnb_leastchange,
+        bnb::select_coin_bnb, coingrinder::select_coin_coingrinder, fifo::select_coin_fifo,
         lowestlarger::select_coin_lowestlarger,
-        // srd::select_coin_srd,
     },
-    types::{CoinSelectionOpt, OutputGroup, SelectionError, SelectionOutput},
+    types::{CoinSelectionOpt, OutputGroup, SelectionAlgorithm, SelectionError, SelectionOutput},
+    utils::insufficient_funds,
 };
 
-/// The global coin selection API that applies all algorithms and produces the result with the lowest [WasteMetric].
-///
-/// At least one selection solution should be found.
+/// Signature shared by every individual coin selection algorithm.
 type CoinSelectionFn =
     fn(&[OutputGroup], &CoinSelectionOpt) -> Result<SelectionOutput, SelectionError>;
 
+/// The algorithms run by [`select_coin`], tagged with their identity.
+const ALGORITHMS: [(SelectionAlgorithm, CoinSelectionFn); 4] = [
+    (SelectionAlgorithm::BranchAndBound, select_coin_bnb),
+    (SelectionAlgorithm::CoinGrinder, select_coin_coingrinder),
+    (SelectionAlgorithm::Fifo, select_coin_fifo),
+    (SelectionAlgorithm::LowestLarger, select_coin_lowestlarger),
+];
+
+/// The global coin selection API. Runs every algorithm and returns *all* successful results, each
+/// tagged with the [`SelectionAlgorithm`] that produced it, ordered best-first.
+///
+/// The best-result policy is: fewest real UTXOs, then fewest groups, then least waste. So the first
+/// element is the overall best selection. (`selected_inputs.len()` counts the chosen
+/// [`OutputGroup`]s, whereas the `input_count` sum counts the actual UTXOs they bundle; the two
+/// differ only when a group holds more than one UTXO.)
 pub fn select_coin(
     inputs: &[OutputGroup],
     options: &CoinSelectionOpt,
-) -> Result<SelectionOutput, SelectionError> {
-    if options.target_value == 0 {
-        return Err(SelectionError::NonPositiveTarget);
-    }
+) -> Result<Vec<(SelectionAlgorithm, SelectionOutput)>, SelectionError> {
+    // Run all algorithms concurrently. Checks only after all threads return and join.
+    let outcomes: Vec<(SelectionAlgorithm, Result<SelectionOutput, SelectionError>)> =
+        thread::scope(|scope| {
+            let handles: Vec<_> = ALGORITHMS
+                .into_iter()
+                .map(|(name, algo)| scope.spawn(move || (name, algo(inputs, options))))
+                .collect();
+            handles
+                .into_iter()
+                // A panicking algorithm is treated as "no solution" rather than poisoning the API.
+                .map(|handle| {
+                    handle.join().unwrap_or((
+                        SelectionAlgorithm::BranchAndBound,
+                        Err(SelectionError::NoSolutionFound),
+                    ))
+                })
+                .collect()
+        });
 
-    let mut results = vec![];
-
-    let mut sorted_inputs = inputs.to_vec();
-    sorted_inputs.sort_by(|a, b| a.value.cmp(&b.value));
-
-    let algorithms: Vec<(&str, CoinSelectionFn)> = vec![
-        ("bnb", select_coin_bnb),
-        // ("srd", select_coin_srd),
-        ("fifo", select_coin_fifo),
-        ("lowestlarger", select_coin_lowestlarger),
-        ("knapsack", select_coin_knapsack),
-        ("leastchange", select_coin_bnb_leastchange), // Future algorithms can be added here
-    ];
-
-    for (algo_name, algo) in algorithms {
-        if let Ok(result) = algo(inputs, options) {
-            let input_amount = result
-                .selected_inputs
-                .iter()
-                .map(|&idx| inputs[idx].value)
-                .sum::<u64>();
-            let change = input_amount.saturating_sub(options.target_value);
-            results.push((result, change, algo_name));
+    let mut results = Vec::new();
+    for (name, outcome) in outcomes {
+        match outcome {
+            Ok(result) => results.push((name, result)),
+            Err(
+                error @ (SelectionError::NonPositiveTarget
+                | SelectionError::NonPositiveFeeRate
+                | SelectionError::AbnormallyHighFeeRate),
+            ) => return Err(error),
+            Err(SelectionError::InsufficientFunds { .. } | SelectionError::NoSolutionFound) => {
+                continue
+            }
         }
     }
 
     if results.is_empty() {
-        return Err(SelectionError::InsufficientFunds);
+        return Err(insufficient_funds(inputs, options));
     }
 
-    let best_result = results
-        .into_iter()
-        .min_by(|a, b| {
-            a.1.cmp(&b.1) // Compare change amount first (a.1 vs b.1)
-                .then_with(|| {
-                    a.0.waste
-                        .0
-                        .partial_cmp(&b.0.waste.0)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                }) // Then compare waste
-                .then_with(|| a.0.selected_inputs.len().cmp(&b.0.selected_inputs.len()))
-            // Finally compare number of inputs
-        })
-        .map(|(result, _, _)| result)
-        .expect("No selection results found");
-
-    Ok(best_result)
+    // Order best-first: fewest real UTXOs, then fewest groups, then waste.
+    results.sort_by_key(|(_, output)| {
+        let total_input_count = output
+            .selected_inputs
+            .iter()
+            .map(|&idx| inputs[idx].input_count)
+            .sum::<usize>();
+        (
+            total_input_count,
+            output.selected_inputs.len(),
+            output.waste.0,
+        )
+    });
+    Ok(results)
 }
 
 #[cfg(test)]
 mod test {
 
     use crate::{
+        algorithms::{
+            bnb::select_coin_bnb, coingrinder::select_coin_coingrinder, fifo::select_coin_fifo,
+            lowestlarger::select_coin_lowestlarger,
+        },
         selectcoin::select_coin,
-        types::{CoinSelectionOpt, ExcessStrategy, OutputGroup, SelectionError},
+        types::{
+            basic_output_group, CoinSelectionOpt, ExcessStrategy, OutputGroup, SelectionError,
+            SelectionOutput,
+        },
+        utils::calculate_fee,
     };
 
     fn setup_basic_output_groups() -> Vec<OutputGroup> {
         vec![
-            OutputGroup {
-                value: 1_500_000,
-                weight: 50,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 2_000_000,
-                weight: 200,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 3_000_000,
-                weight: 300,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 2_500_000,
-                weight: 100,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 4_000_000,
-                weight: 150,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 500_000,
-                weight: 250,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 6_000_000,
-                weight: 120,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 70_000,
-                weight: 50,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 800_000,
-                weight: 60,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 900_000,
-                weight: 70,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 100_000,
-                weight: 80,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 1_000_000,
-                weight: 90,
-                input_count: 1,
-                creation_sequence: None,
-            },
+            basic_output_group(1_500_000, 50),
+            basic_output_group(2_000_000, 200),
+            basic_output_group(3_000_000, 300),
+            basic_output_group(2_500_000, 100),
+            basic_output_group(4_000_000, 150),
+            basic_output_group(500_000, 250),
+            basic_output_group(6_000_000, 120),
+            basic_output_group(70_000, 50),
+            basic_output_group(800_000, 60),
+            basic_output_group(900_000, 70),
+            basic_output_group(100_000, 80),
+            basic_output_group(1_000_000, 90),
         ]
     }
 
@@ -167,11 +128,40 @@ mod test {
             base_weight: 10,
             change_weight: 50,
             change_cost: 10,
-            avg_input_weight: 20,
-            avg_output_weight: 10,
             min_change_value: 500,
             excess_strategy: ExcessStrategy::ToChange,
         }
+    }
+
+    /// Asserts that a set of selected inputs actually covers the target plus the total fee.
+    fn assert_covers_target(
+        inputs: &[OutputGroup],
+        options: &CoinSelectionOpt,
+        selected: &[usize],
+    ) {
+        let value: u64 = selected.iter().map(|&i| inputs[i].value).sum();
+        let selected_weight: u64 = selected.iter().map(|&i| inputs[i].weight).sum();
+        let total_fee = calculate_fee(
+            options.base_weight + selected_weight,
+            options.target_feerate,
+        )
+        .max(options.min_absolute_fee);
+        assert!(
+            value >= options.target_value + total_fee,
+            "selection {:?} (value {}) does not cover target {} + fee {}",
+            selected,
+            value,
+            options.target_value,
+            total_fee
+        );
+    }
+
+    #[test]
+    fn test_select_coin_rejects_zero_target() {
+        let inputs = setup_basic_output_groups();
+        let options = setup_options(0);
+        let result = select_coin(&inputs, &options);
+        assert!(matches!(result, Err(SelectionError::NonPositiveTarget)));
     }
 
     #[test]
@@ -180,15 +170,10 @@ mod test {
         let options = setup_options(654321);
         let result = select_coin(&inputs, &options);
         assert!(result.is_ok());
-        let selection_output = result.unwrap();
-        assert!(!selection_output.selected_inputs.is_empty());
-
-        let selected_values = selection_output
-            .selected_inputs
-            .iter()
-            .map(|&idx| inputs[idx].value)
-            .collect::<Vec<_>>();
-        eprintln!("Best Result : {:?}", selected_values);
+        let ranked = result.unwrap();
+        let best = &ranked[0].1;
+        assert!(!best.selected_inputs.is_empty());
+        assert_covers_target(&inputs, &options, &best.selected_inputs);
     }
 
     #[test]
@@ -196,296 +181,85 @@ mod test {
         let inputs = setup_basic_output_groups();
         let options = setup_options(999_999_999); // Set a target value higher than the sum of all inputs
         let result = select_coin(&inputs, &options);
-        assert!(matches!(result, Err(SelectionError::InsufficientFunds)));
+        assert!(matches!(
+            result,
+            Err(SelectionError::InsufficientFunds {
+                available: 22_370_000,
+                required: 1_000_003_059,
+            })
+        ));
     }
 
     #[test]
-    fn test_select_coin_equals_lowest_larger() {
-        // Define the inputs such that the lowest_larger algorithm should be optimal
-        let inputs = vec![
-            OutputGroup {
-                value: 500,
-                weight: 50,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 1500,
-                weight: 100,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 2000,
-                weight: 200,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 1000,
-                weight: 75,
-                input_count: 1,
-                creation_sequence: None,
-            },
-        ];
+    fn test_select_coin_keeps_success_when_another_algorithm_is_insufficient() {
+        let inputs = vec![basic_output_group(1_000, 0)];
+        let mut options = setup_options(1_000);
+        options.target_feerate = 1.0;
+        options.long_term_feerate = Some(1.0);
+        options.base_weight = 0;
+        options.change_cost = 20;
+        options.min_change_value = 100;
 
-        // Define the target selection options
-        let options = CoinSelectionOpt {
-            target_value: 1600, // Target value which lowest_larger can satisfy
-            target_feerate: 0.4,
-            long_term_feerate: Some(0.4),
-            min_absolute_fee: 0,
-            base_weight: 10,
-            change_weight: 50,
-            change_cost: 10,
-            avg_input_weight: 50,
-            avg_output_weight: 25,
-            min_change_value: 500,
-            excess_strategy: ExcessStrategy::ToChange,
-        };
-
-        // Call the select_coin function, which should internally use the lowest_larger algorithm
-        let selection_result = select_coin(&inputs, &options).unwrap();
-
-        // Deterministically choose a result based on how lowest_larger would select
-        let expected_inputs = vec![2]; // Example choice based on lowest_larger logic
-
-        // Sort the selected inputs to ignore the order
-        let mut selection_inputs = selection_result.selected_inputs.clone();
-        let mut expected_inputs_sorted = expected_inputs.clone();
-        selection_inputs.sort();
-        expected_inputs_sorted.sort();
+        let ranked = select_coin(&inputs, &options).expect("BnB should find the exact match");
+        assert_eq!(ranked[0].1.selected_inputs, vec![0]);
     }
 
+    /// The core contract of the wrapper: it must return the fewest inputs achievable by any of the
+    /// individual algorithms (and a selection that actually covers the target).
     #[test]
-    fn test_select_coin_equals_knapsack() {
-        // Define inputs that are best suited for knapsack algorithm to match the target value with minimal waste
-        let inputs = vec![
-            OutputGroup {
-                value: 1500,
-                weight: 1,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 2500,
-                weight: 1,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 3000,
-                weight: 1,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 1000,
-                weight: 1,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 500,
-                weight: 1,
-                input_count: 1,
-                creation_sequence: None,
-            },
-        ];
+    fn test_select_coin_returns_minimum_inputs() {
+        let inputs = setup_basic_output_groups();
+        let options = setup_options(654321);
 
-        // Define the target selection options
-        let options = CoinSelectionOpt {
-            target_value: 4000, // Set a target that knapsack can match efficiently
-            target_feerate: 1.0,
-            min_absolute_fee: 0,
-            base_weight: 1,
-            change_weight: 1,
-            change_cost: 1,
-            avg_input_weight: 1,
-            avg_output_weight: 1,
-            min_change_value: 500,
-            long_term_feerate: Some(0.5),
-            excess_strategy: ExcessStrategy::ToChange,
-        };
+        let individual_min_inputs = [
+            select_coin_bnb(&inputs, &options),
+            select_coin_coingrinder(&inputs, &options),
+            select_coin_fifo(&inputs, &options),
+            select_coin_lowestlarger(&inputs, &options),
+        ]
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .map(|r| r.selected_inputs.len())
+        .min()
+        .expect("at least one algorithm should succeed");
 
-        let selection_result = select_coin(&inputs, &options).unwrap();
-
-        // Deterministically choose a result with justification
-        // Here, we assume that the `select_coin` function internally chooses the most efficient set
-        // of inputs that meet the `target_value` while minimizing waste. This selection is deterministic
-        // given the same inputs and options. Therefore, the following assertions are based on
-        // the assumption that the chosen inputs are correct and optimized.
-
-        let expected_inputs = vec![1, 3]; // Example deterministic choice, adjust as needed
-
-        // Sort the selected inputs to ignore the order
-        let mut selection_inputs = selection_result.selected_inputs.clone();
-        let mut expected_inputs_sorted = expected_inputs.clone();
-        selection_inputs.sort();
-        expected_inputs_sorted.sort();
+        let ranked = select_coin(&inputs, &options).expect("selection should succeed");
+        let chosen = &ranked[0].1;
+        assert_eq!(
+            chosen.selected_inputs.len(),
+            individual_min_inputs,
+            "wrapper did not return the minimum-input selection"
+        );
+        assert_covers_target(&inputs, &options, &chosen.selected_inputs);
     }
 
+    /// `select_coin` must return every successful algorithm's result, ordered best-first by the
+    /// policy: fewest real UTXOs, then fewest groups, then waste.
     #[test]
-    fn test_select_coin_equals_fifo() {
-        // Helper function to create OutputGroups
-        fn create_fifo_inputs(values: Vec<u64>) -> Vec<OutputGroup> {
-            values
-                .into_iter()
-                .map(|value| OutputGroup {
-                    value,
-                    weight: 100,
-                    input_count: 1,
-                    creation_sequence: None,
-                })
-                .collect()
-        }
+    fn test_select_coin_orders_best_first() {
+        let inputs = setup_basic_output_groups();
+        let options = setup_options(654321);
 
-        let options_case = CoinSelectionOpt {
-            target_value: 250000,
-            target_feerate: 1.0,
-            min_absolute_fee: 0,
-            base_weight: 100,
-            change_weight: 10,
-            change_cost: 20,
-            avg_input_weight: 10,
-            avg_output_weight: 10,
-            min_change_value: 400,
-            long_term_feerate: Some(0.5),
-            excess_strategy: ExcessStrategy::ToChange,
+        let ranked = select_coin(&inputs, &options).expect("selection should succeed");
+        assert!(!ranked.is_empty());
+
+        // The list is sorted best-first by the rank key (non-decreasing keys).
+        let key = |output: &SelectionOutput| {
+            let total_input_count: usize = output
+                .selected_inputs
+                .iter()
+                .map(|&idx| inputs[idx].input_count)
+                .sum();
+            (
+                total_input_count,
+                output.selected_inputs.len(),
+                output.waste.0,
+            )
         };
-
-        let inputs_case = create_fifo_inputs(vec![80000, 70000, 60000, 50000, 40000, 30000]);
-
-        let result_case = select_coin(&inputs_case, &options_case).unwrap();
-        let expected_case = vec![0, 1, 2, 3]; // Indexes of oldest UTXOs that sum to target
-        assert_eq!(result_case.selected_inputs, expected_case);
-    }
-
-    #[test]
-    fn test_select_coin_equals_bnb() {
-        let inputs = vec![
-            OutputGroup {
-                value: 150000,
-                weight: 100,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 250000,
-                weight: 100,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 300000,
-                weight: 100,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 100000,
-                weight: 100,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 50000,
-                weight: 100,
-                input_count: 1,
-                creation_sequence: None,
-            },
-        ];
-        let opt = CoinSelectionOpt {
-            target_value: 500000,
-            target_feerate: 1.0,
-            min_absolute_fee: 0,
-            base_weight: 100,
-            change_weight: 10,
-            change_cost: 20,
-            avg_input_weight: 10,
-            avg_output_weight: 10,
-            min_change_value: 400,
-            long_term_feerate: Some(0.5),
-            excess_strategy: ExcessStrategy::ToChange,
-        };
-        let ans = select_coin(&inputs, &opt);
-
-        if let Ok(selection_output) = ans {
-            let mut selected_inputs = selection_output.selected_inputs.clone();
-            selected_inputs.sort();
-
-            // The expected solution is vec![1, 2] because the combined value of the selected inputs
-            // (250000 + 300000) meets the target value of 500000 with minimal excess. This selection
-            // minimizes waste and adheres to the constraints of the coin selection algorithm, which
-            // aims to find the most optimal solution.
-            // Branch and Bound also gives a better time complexity, referenced from Mark Erhardt's Master Thesis.
-
-            let expected_solution = vec![1, 2];
-            assert_eq!(
-                selected_inputs, expected_solution,
-                "Expected solution {:?}, but got {:?}",
-                expected_solution, selected_inputs
-            );
-        }
-    }
-
-    #[test]
-    fn test_select_coin_equals_leastchange_bnb() {
-        // Inputs designed so that only one combination gives minimal change
-        let inputs = vec![
-            OutputGroup {
-                value: 1000,
-                weight: 10,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 2000,
-                weight: 10,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 3000,
-                weight: 10,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 4000,
-                weight: 10,
-                input_count: 1,
-                creation_sequence: None,
-            },
-            OutputGroup {
-                value: 5500,
-                weight: 10,
-                input_count: 1,
-                creation_sequence: None,
-            },
-        ];
-
-        let options = CoinSelectionOpt {
-            target_value: 12000,
-            target_feerate: 1.0,
-            min_absolute_fee: 0,
-            base_weight: 100,
-            change_weight: 10,
-            change_cost: 20,
-            avg_input_weight: 10,
-            avg_output_weight: 10,
-            min_change_value: 400,
-            long_term_feerate: Some(0.5),
-            excess_strategy: ExcessStrategy::ToChange,
-        };
-
-        let result = select_coin(&inputs, &options);
-        assert!(result.is_ok());
-        let selection_output = result.unwrap();
-        assert!(!selection_output.selected_inputs.is_empty());
-
-        let mut selected = selection_output.selected_inputs.clone();
-        selected.sort();
-        assert_eq!(selected, vec![0, 2, 3, 4]);
+        let keys: Vec<_> = ranked.iter().map(|(_, output)| key(output)).collect();
+        assert!(
+            keys.windows(2).all(|w| w[0] <= w[1]),
+            "ranked results are not ordered best-first: {keys:?}"
+        );
     }
 }

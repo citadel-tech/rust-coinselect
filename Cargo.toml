@@ -1,6 +1,6 @@
 [package]
 name = "rust-coinselect"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "A blockchain-agnostic coin selection library built in Rust."
 readme = "README.md"
@@ -12,7 +12,6 @@ repository = "https://github.com/citadel-tech/rust-coinselect"
 exclude = [".github"]
 
 [dependencies]
-rand = "0.8.5"
 
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"] }
@@ -26,15 +25,7 @@ name = "benches"
 harness = false
 
 [[bench]]
-name = "benches_srd"
-harness = false
-
-[[bench]]
 name = "benches_bnb"
-harness = false
-
-[[bench]]
-name = "benches_knapsack"
 harness = false
 
 [[bench]]
@@ -46,5 +37,5 @@ name = "benches_fifo"
 harness = false
 
 [[bench]]
-name = "benches_leastchange"
+name = "benches_coingrinder"
 harness = false

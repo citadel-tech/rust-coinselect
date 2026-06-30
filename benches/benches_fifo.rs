@@ -34,8 +34,6 @@ fn benchmark_select_coin_fifo(c: &mut Criterion) {
         base_weight: 10,
         change_weight: 50,
         change_cost: 10,
-        avg_input_weight: 20,
-        avg_output_weight: 10,
         min_change_value: 500,
         excess_strategy: ExcessStrategy::ToChange,
     };

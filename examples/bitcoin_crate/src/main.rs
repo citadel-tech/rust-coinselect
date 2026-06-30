@@ -12,7 +12,7 @@ use bitcoin::{
 use rust_coinselect::{
     selectcoin::select_coin,
     types::{CoinSelectionOpt, ExcessStrategy, OutputGroup},
-    utils::{calculate_base_weight_btc, calculate_fee},
+    utils::calculate_fee,
 };
 use std::str::FromStr;
 
@@ -108,12 +108,6 @@ fn main() {
     let change_weight = change_output.weight().to_wu();
     let change_cost = calculate_fee(change_weight, long_term_feerate);
     let target_weight = target_output.weight().to_wu();
-    let avg_output_weight = (change_weight + target_weight) / 2;
-    let avg_input_weight = inputs
-        .iter()
-        .map(|input| input.segwit_weight().to_wu())
-        .sum::<u64>()
-        / inputs.len() as u64;
 
     // Create coin selection options
     let coin_selection_option = CoinSelectionOpt {
@@ -121,11 +115,11 @@ fn main() {
         target_feerate: 15.0,
         long_term_feerate: Some(long_term_feerate),
         min_absolute_fee: 4000,
-        base_weight: calculate_base_weight_btc(target_weight + change_weight),
+        // Total default: (16 + 2 + 4 + 4 + 1 + 16 = 43 WU + variable) WU
+        // Source - https://docs.rs/bitcoin/latest/src/bitcoin/blockdata/transaction.rs.html#599-602
+        base_weight: target_weight + 43,
         change_weight,
         change_cost,
-        avg_input_weight,
-        avg_output_weight,
         min_change_value: 100,
         excess_strategy: ExcessStrategy::ToChange,
     };
@@ -151,7 +145,8 @@ fn main() {
     println!("The given OutputGroups are......");
     log_utxos(&utxos);
     match select_coin(&utxos, &coin_selection_option) {
-        Ok(selection) => {
+        Ok(selections) => {
+            let (_, selection) = selections.first().expect("selection result is non-empty");
             println!("Selected utxo index and waste metrics are: {:?}", selection);
 
             let selected_txins: Vec<TxIn> = selection

@@ -22,6 +22,16 @@ pub struct OutputGroup {
     pub creation_sequence: Option<u32>,
 }
 
+#[cfg(test)]
+pub(crate) fn basic_output_group(value: u64, weight: u64) -> OutputGroup {
+    OutputGroup {
+        value,
+        weight,
+        input_count: 1,
+        creation_sequence: None,
+    }
+}
+
 /// Options required to compute fees and waste metric.
 #[derive(Debug, Clone)]
 pub struct CoinSelectionOpt {
@@ -53,12 +63,6 @@ pub struct CoinSelectionOpt {
     /// This includes the transaction fees for both the current transaction (where the change is created) and the future transaction (where the change is spent)
     pub change_cost: u64,
 
-    /// Estimate of average weight of an input.
-    pub avg_input_weight: u64,
-
-    /// Estimate of average weight of an output.
-    pub avg_output_weight: u64,
-
     /// The smallest amount of change that is considered acceptable in a transaction given the dust limit
     pub min_change_value: u64,
 
@@ -87,7 +91,11 @@ pub enum ExcessStrategy {
 /// Error Describing failure of a selection attempt, on any subset of inputs.
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Clone, Copy)]
 pub enum SelectionError {
-    InsufficientFunds,
+    /// The available UTXOs cannot cover the target and fees for spending the supplied inputs.
+    InsufficientFunds {
+        available: u64,
+        required: u64,
+    },
     NoSolutionFound,
     NonPositiveTarget,
     NonPositiveFeeRate,
@@ -100,8 +108,17 @@ pub enum SelectionError {
 /// In high fee rate environments, selecting fewer inputs reduces transaction fees.
 /// In low fee rate environments, selecting more inputs reduces overall fees.
 /// It compares various selection algorithms to find the most optimized solution, represented by the lowest [WasteMetric] value.
-#[derive(Debug)]
-pub struct WasteMetric(pub f32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WasteMetric(pub i64);
+
+/// Identifies which selection algorithm produced a given [`SelectionOutput`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SelectionAlgorithm {
+    BranchAndBound,
+    CoinGrinder,
+    Fifo,
+    LowestLarger,
+}
 
 /// The result of selection algorithm.
 #[derive(Debug)]
@@ -110,6 +127,8 @@ pub struct SelectionOutput {
     pub selected_inputs: Vec<usize>,
     /// The waste amount, for the above inputs.
     pub waste: WasteMetric,
+    /// The transaction fee (in satoshis) for the above inputs.
+    pub fee: u64,
 }
 
 /// EffectiveValue type alias
@@ -117,3 +136,6 @@ pub type EffectiveValue = u64;
 
 /// Weight type alias
 pub type Weight = u64;
+
+/// Upper bound on explored nodes,the bounded-search policy used by BnB and Coingrinder.
+pub const TOTAL_TRIES: u32 = 100_000;
